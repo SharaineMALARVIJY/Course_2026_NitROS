@@ -1,0 +1,3 @@
+sensor_msgs/Range ir_rear_left
+sensor_msgs/Range ir_rear_right
+sensor_msgs/Range sonar_rear
