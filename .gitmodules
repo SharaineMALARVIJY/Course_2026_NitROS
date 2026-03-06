@@ -1,0 +1,3 @@
+[submodule "src_raspberry_pi/low_level_ros2/sllidar_ros2"]
+	path = src_raspberry_pi/low_level_ros2/sllidar_ros2
+	url = https://github.com/slamtec/sllidar_ros2.git
