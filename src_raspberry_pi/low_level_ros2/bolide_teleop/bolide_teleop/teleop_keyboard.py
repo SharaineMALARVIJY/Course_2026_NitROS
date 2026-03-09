@@ -7,8 +7,6 @@ from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import Float32
 from bolide_interfaces.msg import SpeedDirection
 
-# TODO - work on brake
-
 
 class KeyboardController(Node):
     """ROS2 Class of the Keyboard control
@@ -16,30 +14,31 @@ class KeyboardController(Node):
     def __init__(self):
         super().__init__('teleop_node')
 
-        # PARAMS
-        self.declare_parameter('debug', False)
-
         self.get_logger().info("[INFO] -- Teleop node started, Keyboard interrupt (CTRL+C) will stop the node")
 
-        # A debug bool to print or not the data
-        self.debug = self.get_parameter('debug').get_parameter_value().bool_value
-        if self.debug:
-            rclpy.logging.set_logger_level('teleop_node', 10)  # 10 is for DEBUG level
+        # Debug
+        self.declare_parameter('debug', False)
+        self.debug = self.get_parameter('debug').value
 
         # create publish of speed and direction
         self.speed_pub = self.create_publisher(Float32, '/cmd_vel', 10)
         self.direction_pub = self.create_publisher(Float32, '/cmd_dir', 10)
 
         # Timer for the data
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.declare_parameter('rate', 10)                          # cmd_vel publication frequency (Hz)
+        rate = self.get_parameter('rate').value
+        self.timer = self.create_timer(1/rate, self.timer_callback)
 
         # init speed and direction
         self.current_speed = 0.0
         self.current_direction = 0.0
+        self.braking = False
         
         # Speed and direction increments
-        self.speed_increment = 0.085  # 10% increment per key press (old : 0.04)
-        self.direction_increment = 0.2  # 20% increment per key press
+        self.declare_parameter('speed_increment', 0.04)                         # 4% increment per key press
+        self.speed_increment = self.get_parameter('speed_increment').value
+        self.declare_parameter('direction_increment', 0.2)                      # 20% increment per key press
+        self.direction_increment = self.get_parameter('direction_increment').value
         
         self.key_mapping = {
             '\x1b[A': 'UP',     
@@ -48,7 +47,8 @@ class KeyboardController(Node):
             '\x1b[D': 'LEFT', 
             's': 'BRAKE', 
             'q': 'QUIT', 
-            'n': 'NEUTRAL'
+            'n': 'NEUTRAL',
+            'r': 'DIRECTION REVERSAL'
         }
 
         key_mapping_str = '\n'.join([f'\t{key}: {value}' for key, value in self.key_mapping.items()])
@@ -67,19 +67,16 @@ class KeyboardController(Node):
     
         
     def stop_vehicle(self):
-        """Force vehicle to neutral and publish once."""
+        """Force the vehicle to neutral and publish once."""
         self.current_speed = 0.0
         self.current_direction = 0.0
         self.speed_pub.publish(Float32(data=0.0))
         self.direction_pub.publish(Float32(data=0.0))
+        self.braking = False
         self.get_logger().info("[INFO] -- Vehicle set to neutral")
 
-    def perform_action(self, coeff=1.0):
-        """Perform action depending on the key pressed.\
-            Can be better but we want it to be simple because it is a autonomous car normally.
-
-        Args:
-            coeff (float, optional): a simple coefficient. Defaults to 1.0.
+    def perform_action(self):
+        """Perform action depending on the key pressed.
         """
         mykey = click.getchar()
 
@@ -90,15 +87,21 @@ class KeyboardController(Node):
             return
             
         if action == 'UP':
+            if self.braking:
+                self.current_speed = 0.0  # repart de 0
+                self.braking = False
             # Increment speed (forward)
-            self.current_speed += self.speed_increment * coeff
+            self.current_speed += self.speed_increment
             # Clamp to max 1.0
             if self.current_speed > 1.0:
                 self.current_speed = 1.0
                 
         elif action == 'DOWN':
+            if self.braking:
+                self.current_speed = 0.0  # repart de 0
+                self.braking = False
             # Decrement speed (backward)
-            self.current_speed -= self.speed_increment * coeff
+            self.current_speed -= self.speed_increment
             # Clamp to min -1.0
             if self.current_speed < -1.0:
                 self.current_speed = -1.0
@@ -119,7 +122,8 @@ class KeyboardController(Node):
                 
         elif action == 'BRAKE':
             # Stop immediately
-            self.current_speed = 0.0
+            self.braking = True
+            self.current_speed = -2.0
             
         elif action == 'QUIT':
             # Set to neutral before quitting
@@ -131,6 +135,11 @@ class KeyboardController(Node):
             # Reset speed and direction to neutral
             self.current_speed = 0.0
             self.current_direction = 0.0
+
+        elif action == 'DIRECTION REVERSAL':
+            # Reverse drive direction with same speed (not steering direction)
+            self.current_speed = -self.current_speed
+
         else:
             self.get_logger().warn(f"Unknown action: {action}")
 

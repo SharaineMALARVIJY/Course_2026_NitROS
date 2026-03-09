@@ -1,133 +1,111 @@
-""" The node to command the speed of the car """
-
-# IMPORTS
-import math
-from dynamixel_sdk import PortHandler, PacketHandler
-
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int16
-from bolide_interfaces.msg import SpeedDirection
-from std_msgs.msg import Float32 
+from std_msgs.msg import Int16, Float32
 
-
-def get_sign(val):
-    """get the sign of a value
-
-    Args:
-        val (any): any int or float value
-
-    Returns:
-        int: 1 or -1 if positive or negative
-    """
-    return (val > 0) - (val < 0)
-
+# équivalent de l'ancien code
+# pour Forward -> Reverse : faire Forward -> Brake ('s') -> Neutral ('n') -> Reverse 
+# (attention : les transitions doivent avoir un délai : 150ms)
+# machine à état cmd_vel_node en cours de construction (la séquence exacte a pris du temp à trouver)
 
 class CommandSpeedNode(Node):
+
     def __init__(self):
         super().__init__('cmd_vel_node')
 
-        self.init = 0
-
-        # PARAMS
+        # PARAMETRES
         self.declare_parameter('debug', False)
-        self.declare_parameter('minimal_speed', 8.3)
-        self.debug = self.get_parameter('debug').get_parameter_value().bool_value
-        if self.debug:
-            rclpy.logging.set_logger_level('cmd_vel_node', 10)  # 10 is for DEBUG level
+        self.debug = self.get_parameter('debug').value
 
-        self.MAXSPEED = 10
-        self.MINSPEED = self.get_parameter('minimal_speed').get_parameter_value().double_value
-        self.NEUTRAL = 8.0
-        self.REVERSEMINSPEED = 7.7
-        self.REVERSEMAXSPEED = 6.5
-        self.DIR_VEL_THRESHOLD_M_S = 0.05
-        self.curr_velocity_m_s = 0.0
+        # # rétrocompatiblilité avec l'ancien calibrage ESC
+        # ## NEW_FORWARD_MIN
+        # NEUTRAL = 1500
+        # OLD_FORWARD_MIN = 1532  #bolide1 : 1557 (conversion : value_centered_on_8 * 0.00938 * 20000)
+        # OLD_FORWARD_MAX = 1876  #bolide1 : 1444
+        # FORWARD_RATIO = (OLD_FORWARD_MIN - NEUTRAL)/(OLD_FORWARD_MAX - NEUTRAL)
+        # NEW_FORWARD_MIN = NEUTRAL + FORWARD_RATIO * NEUTRAL
+        # ## NEW_REVERSE_MIN
+        # OLD_REVERSE_MIN = 1468
+        # OLD_REVERSE_MAX = 1220
+        # REVERSE_RATIO = (NEUTRAL - OLD_REVERSE_MIN)/(NEUTRAL - OLD_REVERSE_MAX)
+        # NEW_REVERSE_MIN = NEUTRAL - REVERSE_RATIO * NEUTRAL
 
-        self.esc_period = 20000  # ns
+        # calibrage actuel = ancien
+        # PWM en µs (deadzone ESC : 1500 ±40 µs)            # indépendant de la calibration ESC
+        self.PWM_FORWARD_MAX = 1876 #new 2000
+        self.PWM_FORWARD_MIN = 1532 #new 1628               # old => 1500+4%(Max-Min) -> 1546 (>1540)
+        self.PWM_NEUTRAL = 1500
+        self.PWM_REVERSE_MIN = 1468 #new 1329               # old => 1500-4%(Max-Min) -> 1453 (<1460)
+        self.PWM_REVERSE_MAX = 1220 #new 1000
 
-        self.curr_dir = 1
-        self.tx_data = Int16()
+        self.CMD_VEL_DEADZONE = 0.01                        # deadzone de cmd_vel
+        self.SAFETY_TIMEOUT = 0.5                           # temps max sans commande avant neutre
 
-        self.safety_timeout = 0.5
-        self.last_command_time = self.get_clock().now()
+        # Pub / Sub
+        self.publisher = self.create_publisher(Int16, "/stm32_data", 10)
+        self.subscriber = self.create_subscription(Float32, "/cmd_vel", self.cmd_callback, 10)
 
-        self.sub = self.create_subscription(Float32, "/cmd_vel", self.cmd_callback, 10)
-        self.stm32_publish = self.create_publisher(Int16, "/stm32_data", 10)
+        # Armement ESC au démarrage
+        self.publish_pwm(self.PWM_NEUTRAL)
 
-        # Unique Timer for the security
-        self.timer_safety = self.create_timer(1.0, self.emergency_stop, autostart=False)
+        # Timer sécurité
+        self.timer_safety = self.create_timer(self.SAFETY_TIMEOUT,self.emergency_stop)
 
-        self.init = 1
-
-    def cmd_callback(self, data):
-        self.timer_safety.cancel()  # cancel the brake timer
-        self.cmd_velocity = data.data
-        if not get_sign(self.cmd_velocity) == self.curr_dir:
-            if (not self.curr_dir) or (abs(self.curr_velocity_m_s) < self.DIR_VEL_THRESHOLD_M_S):
-
-                # We can command reverse while the car is going forwards
-                # However, the car needs to stop and then start reversing before it actually goes in reverse.
-                # So we only switch the sign if the car is going slow enough to be considered "stationnary".
-                self.curr_dir = get_sign(self.cmd_velocity)
-
-        # Update the last command time and reset the brake timer
+    # CALLBACK CMD_VEL
+    def cmd_callback(self, msg):
         self.timer_safety.reset()
-        self.command(self.cmd_velocity)
+        cmd_vel = msg.data
 
-    def emergency_stop(self):
-        self.get_logger().warn("Emergency stop triggered due to timeout.")
-        self.command(0.0)
+        if cmd_vel == -2:
+            self.publish_pwm(self.PWM_REVERSE_MAX)
+            return
 
-    def command(self, cmd_speed):
-        if 1 > cmd_speed >= 0.01:
-            self.forward()
+        cmd_vel = max(min(cmd_vel, 1.0), -1.0)
 
-        elif -0.01 < cmd_speed < 0.01:
+        if 1 >= cmd_vel >= self.CMD_VEL_DEADZONE:
+            self.forward(cmd_vel)
+
+        elif -self.CMD_VEL_DEADZONE < cmd_vel < self.CMD_VEL_DEADZONE:
             self.neutral()
 
-        elif -1 < cmd_speed < -0.01:
-            self.reverse()
+        elif -1 <= cmd_vel <= -self.CMD_VEL_DEADZONE:
+            self.reverse(cmd_vel)
 
-    def forward(self):
-        self.publish_stm32_data(self.MINSPEED + self.cmd_velocity * (self.MAXSPEED - self.MINSPEED))
-        #self.get_logger().info(f"speed is :{self.MINSPEED}")
+    def forward(self, cmd_vel):
+        # cmd_vel > 0
+        pwm = int(self.PWM_FORWARD_MIN + cmd_vel * (self.PWM_FORWARD_MAX - self.PWM_FORWARD_MIN))
+        self.publish_pwm(pwm)
 
-    def reverse(self):
-        speed_ratio = abs(self.cmd_velocity)
-        self.publish_stm32_data(self.REVERSEMINSPEED + speed_ratio * (self.REVERSEMAXSPEED - self.REVERSEMINSPEED))
+    def reverse(self, cmd_vel):
+        # cmd_vel < 0
+        pwm = int(self.PWM_REVERSE_MIN + cmd_vel * (self.PWM_REVERSE_MIN - self.PWM_REVERSE_MAX))
+        self.publish_pwm(pwm)
 
     def neutral(self):
-        self.publish_stm32_data(self.NEUTRAL)
+        self.publish_pwm(self.PWM_NEUTRAL)
 
-    def publish_stm32_data(self, cycle_ratio):
-        """Send to stm32 the cycle_ration of the motors
+    # ------------------------------
+    # SECURITE
+    # ------------------------------
+    def emergency_stop(self):
+        self.get_logger().warn("Emergency brake triggered : '/cmd_vel' signal timeout")
+        self.publish_pwm(self.PWM_NEUTRAL)
+        self.timer_safety.cancel()
 
-        Args:
-            cycle_ratio (float): the cycle of the cars (netural, reverse, forward,...)
-        """
-        if self.init:
-            self.tx_data = Int16()
-            self.tx_data.data = int(cycle_ratio*0.00938 * self.esc_period)
-
-        # The previous implementation used RPi PWM which was unreliable.
-            # Experiments showed the RPi to overshoot duration by 1.066.
-
-        # Cyclic ratio is the time of the period spent high. So 100 would be constantly high, 50 would be half high half low, etc.
-        # The esc period is 20000 ns, and we send the actual pulse duration to the stm32. We also convert from RPi to "true".
-
-        if rclpy.ok() and self.debug:
-            self.get_logger().debug(f"[DEBUG] -- Tx_data = {self.tx_data}")
-        self.stm32_publish.publish(self.tx_data)
+    # ------------------------------
+    # PUBLICATION STM32
+    # ------------------------------
+    def publish_pwm(self, pwm_value):
+        self.tx_data = Int16()
+        self.tx_data.data = pwm_value
+        if self.debug:
+            self.get_logger().info(f"PWM sent: {pwm_value}")
+        self.publisher.publish(self.tx_data)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    listener = CommandSpeedNode()
-    try:
-        rclpy.spin(listener)
-    except Exception as e:
-        print(f"Error in Command Speed : {e}")
+    node = CommandSpeedNode()
+    rclpy.spin(node)
 
 
 if __name__ == '__main__':
