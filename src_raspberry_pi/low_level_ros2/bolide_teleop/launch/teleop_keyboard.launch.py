@@ -38,7 +38,11 @@ def generate_launch_description():
         output="screen",
         respawn=restart_on_error,
         parameters=[{"debug": True},
-                    {'cmd_vel_deadzone': 0.009}],    # nouvelle calibration : 0.01 (for /cmd_vel retro-compatibility) old : 0.0376
+                    {'cmd_vel_deadzone': 0.01},
+                    {'pwm_forward_max': 2000},  # <= 2000 (ESC max)
+                    {'pwm_forward_min': 1540},
+                    {'pwm_reverse_min': 1460},
+                    {'pwm_reverse_max': 1000}], # >= 1000 (ESC min)
     )
     cmd_dir_node = Node(
         package="bolide_direction",
@@ -46,7 +50,8 @@ def generate_launch_description():
         name="cmd_dir_node",
         output="screen",
         respawn=restart_on_error,
-        parameters=[{"debug": False}],
+        parameters=[{"debug": False},
+                    {'baudrate': 1000000}],
     )
     teleop_keyboard = Node(
         package="bolide_teleop",

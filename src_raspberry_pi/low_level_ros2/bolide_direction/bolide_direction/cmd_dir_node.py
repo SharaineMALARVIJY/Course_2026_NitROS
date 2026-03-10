@@ -91,7 +91,8 @@ class CommandDirection(Node):
 
         # Default setting
         self.DXL_ID = 1
-        self.BAUDRATE = 1000000
+        self.declare_parameter('baudrate', 1000000)
+        self.BAUDRATE = self.get_parameter('baudrate').value
         self.DEVICENAME = '/dev/ttyU2D2'
         # udev rule in /etc/udev/rules.d/99-usb-dynamixel.rules:
         # SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", SYMLINK+="ttyU2D2", MODE="0777"

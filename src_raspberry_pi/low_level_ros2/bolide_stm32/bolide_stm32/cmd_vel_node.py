@@ -27,16 +27,21 @@ class CommandSpeedNode(Node):
         self.debug = self.get_parameter('debug').value
 
         # PWM en µs (deadzone ESC : 1500 ±40 µs)        # indépendant de la calibration de l'ESC
-        self.PWM_FORWARD_MAX = 2000 # old: 1876
-        self.PWM_FORWARD_MIN = 1540 # old: 1532
+        self.declare_parameter('pwm_forward_max', 2000) # old: 1876
+        self.declare_parameter('pwm_forward_min', 1540) # old: 1557
+        self.declare_parameter('pwm_reverse_min', 1460) # old: 1444
+        self.declare_parameter('pwm_reverse_max', 1000) # old: 1220
+        
+        self.PWM_FORWARD_MAX = self.get_parameter('pwm_forward_max').value
+        self.PWM_FORWARD_MIN = self.get_parameter('pwm_forward_min').value
         self.PWM_NEUTRAL = 1500
-        self.PWM_REVERSE_MIN = 1460 # old: 1468
-        self.PWM_REVERSE_MAX = 1000 # old: 1220
+        self.PWM_REVERSE_MIN = self.get_parameter('pwm_reverse_min').value
+        self.PWM_REVERSE_MAX = self.get_parameter('pwm_reverse_max').value
 
 
         # deadzone de cmd_vel (must be positif) -> DEADZONE in [PWM_NEUTRAL ± VEL_DEADZONE]
         self.declare_parameter('cmd_vel_deadzone', 0.01)
-        self.CMD_VEL_DEADZONE = self.get_parameter('cmd_vel_deadzone').value
+        self.CMD_VEL_DEADZONE = self.get_parameter('cmd_vel_deadzone').value - 1e-6 # 1e-6 car de problème de get_parameter sur float
         # temps max sans commande avant neutre    
         self.SAFETY_TIMEOUT = 0.5
 
