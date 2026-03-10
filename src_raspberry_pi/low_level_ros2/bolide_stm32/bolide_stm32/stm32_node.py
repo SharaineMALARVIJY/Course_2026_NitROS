@@ -147,8 +147,14 @@ class STM32_Parser(Node):
     def receiveSensorData(self):
         """Function to receive sensors' data from the STM32 and convert it to publish them
         """
-        self.spi.writebytes(self.tx_buffer)
-        data = self.spi.readbytes(20)
+        try:
+            self.spi.writebytes(self.tx_buffer)
+            data = self.spi.readbytes(20)
+        except KeyboardInterrupt:
+            raise  # on laisse remonter pour sortir de la boucle main
+        except Exception as e:
+            self.get_logger().error(f"SPI error: {e}")
+            return
 
         if self.debug:
             self.get_logger().debug(f"[DEBUG] raw SPI RX: {data}")
@@ -224,18 +230,40 @@ class STM32_Parser(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     stm32_node = STM32_Parser()
-    thread = threading.Thread(target=rclpy.spin, args=(stm32_node, ), daemon=True)
+
+    def spin_with_catch(node):
+        try:
+            rclpy.spin(node)
+        except ExternalShutdownException:
+            pass
+        except Exception as e:
+            if rclpy.ok():  # On ignore les erreurs dues au shutdown
+                node.get_logger().error(f'Exception in spin: {e}')
+    
+    thread = threading.Thread(target=spin_with_catch, args=(stm32_node,), daemon=True)
     thread.start()
 
     rate = stm32_node.create_rate(200)
-    while rclpy.ok():
-        stm32_node.receiveSensorData()
-        rate.sleep()
-    rclpy.shutdown()
-    thread.join()
 
+    try:
+        while rclpy.ok():
+            stm32_node.receiveSensorData()
+            rate.sleep()
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        stm32_node.get_logger().info("Shutting down stm32_node")
+        stm32_node.spi.close()
+        stm32_node.destroy_node()
+        thread.join(timeout=1.0)
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()
+

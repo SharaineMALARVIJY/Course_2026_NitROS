@@ -208,7 +208,11 @@ def main(args=None):
     node = ForkYawOdom()
     try:
         rclpy.spin(node)
+
     except KeyboardInterrupt:
         pass
     node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.shutdown()
+    except Exception:
+        pass

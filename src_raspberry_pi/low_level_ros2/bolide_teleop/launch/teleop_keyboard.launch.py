@@ -1,7 +1,11 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch.actions import RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.actions import EmitEvent
+from launch.events import Shutdown
 
-restart_on_error = True
+restart_on_error = False
 
 def generate_launch_description():
     sllidar = Node(
@@ -32,8 +36,9 @@ def generate_launch_description():
         executable="cmd_vel_node",
         name="cmd_vel_node",
         output="screen",
-        parameters=[{"debug": False}],
         respawn=restart_on_error,
+        parameters=[{"debug": True},
+                    {'cmd_vel_deadzone': 0.009}],    # nouvelle calibration : 0.01 (for /cmd_vel retro-compatibility) old : 0.0376
     )
     cmd_dir_node = Node(
         package="bolide_direction",
@@ -51,10 +56,19 @@ def generate_launch_description():
         respawn=restart_on_error,
         parameters=[
             {'debug': False},
-            {'speed_increment': 0.04},
+            {'speed_increment': 0.01},
             {'direction_increment': 0.2},
             {'rate': 10}                        # Hz
         ]
+    )
+
+
+    # Quand teleop_keyboard se termine → shutdown de tout le launch
+    shutdown_on_teleop_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=teleop_keyboard,
+            on_exit=[EmitEvent(event=Shutdown())]
+        )
     )
 
     return LaunchDescription(
@@ -64,5 +78,6 @@ def generate_launch_description():
             cmd_vel_node,
             cmd_dir_node,
             teleop_keyboard,
+            shutdown_on_teleop_exit,
         ]
     )

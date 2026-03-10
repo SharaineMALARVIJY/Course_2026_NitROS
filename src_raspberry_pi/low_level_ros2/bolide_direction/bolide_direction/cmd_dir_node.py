@@ -19,7 +19,7 @@ DXL_RESOLUTION = 1023.0
 DXL_FULL_RANGE_DEG = 300.0
 
 # --- Direction limits ---
-MAX_STEERING_ANGLE_DEG = 22.0
+MAX_STEERING_ANGLE_DEG = 22.0 #(en vrai c'est 15.5 mais pas le temps de trouver le probleme)
 
 # --- Mechanical geometry ---
 SERVO_ARM_LENGTH_MM = 15.0
@@ -54,24 +54,27 @@ def degrees2pos(degrees):
         * (DXL_RESOLUTION / DXL_FULL_RANGE_DEG)
     )
 
-def set_dir_deg(steering_angle_deg):
-    """
-    Convert steering angle (deg) to motor position (DXL units)
-    """
-    psi_rad = math.radians(steering_angle_deg)
-
-    lever_projection = (
-        STEERING_LINK_LENGTH_MM * math.sin(psi_rad)
-        + STEERING_OFFSET_MM
-    )
-
-    theta_rad = math.acos(lever_projection / SERVO_ARM_LENGTH_MM)
-    theta_deg = math.degrees(theta_rad)
-
-    return degrees2pos(theta_deg)
-
 
 class CommandDirection(Node):
+    def set_dir_deg(self,steering_angle_deg):
+        """
+        Convert steering angle (deg) to motor position (DXL units)
+        """
+        psi_rad = math.radians(steering_angle_deg)
+
+        lever_projection = (
+            STEERING_LINK_LENGTH_MM * math.sin(psi_rad)
+            + STEERING_OFFSET_MM
+        )
+
+        theta_rad = math.acos(lever_projection / SERVO_ARM_LENGTH_MM)
+        theta_deg = math.degrees(theta_rad)
+
+        if self.debug:  # for debug
+            self.get_logger().debug(f"TARGET STEERING ANGLE : {steering_angle_deg:.3f}° -> TARGET MOTOR ANFLE (+offset): {theta_deg:.3f} ({theta_deg+SERVO_ZERO_DEG:.3f}) \r\n")
+
+        return degrees2pos(theta_deg)
+
     def __init__(self):
         super().__init__('cmd_dir_node')
 
@@ -106,15 +109,18 @@ class CommandDirection(Node):
         self.packetHandler = PacketHandler(self.PROTOCOL_VERSION)
 
         if self.portHandler.openPort():
-            self.get_logger().info("[INFO] -- Succeeded to open the port")
+            if self.debug:
+                self.get_logger().info("[INFO] -- Succeeded to open the port\n\r")
         else:
-            self.get_logger().error("[ERROR] -- Failed to open the port")
+            self.get_logger().error("[ERROR] -- Failed to open the port\n\r")
+        self.portHandler.setPacketTimeoutMillis(10) # besoin pour éviter les erreurs de terminaison
 
         # Setting the baudrate
         if self.portHandler.setBaudRate(self.BAUDRATE):
-            self.get_logger().info("[INFO] -- Succeeded to change the baudrate")
+            if self.debug:
+                self.get_logger().info("[INFO] -- Succeeded to set the baudrate\n\r")
         else:
-            self.get_logger().error("[ERROR] -- Failed to change the baudrate")
+            self.get_logger().error("[ERROR] -- Failed to set the baudrate\n\r")
 
         # Subscription
         self.sub = self.create_subscription(Float32, "/cmd_dir", self.cmd_callback, 10)
@@ -130,10 +136,10 @@ class CommandDirection(Node):
         try:
             pos, _, _ = self.packetHandler.read2ByteTxRx(self.portHandler, self.DXL_ID, 36)   # Read the current position of the steering servo
             self.curr_steering_angle_deg = -180/3.14159*pos2psi(pos)  # Convert the position to an angle in degrees
-            pos = set_dir_deg(self.target_steering_angle_deg)  # Convert in DXL position
+            pos = self.set_dir_deg(self.target_steering_angle_deg)  # Convert in DXL position
 
             if self.debug:  # for debug
-                self.get_logger().debug(f"[DEBUG] -- DXL position : {pos}")
+                self.get_logger().debug(f"[DEBUG] -- DXL position : {pos}\r\n")
 
             self.packetHandler.write2ByteTxRx(self.portHandler, self.DXL_ID, 30, pos)  # Sending position to servomotor
         except Exception as e:
@@ -158,15 +164,21 @@ class CommandDirection(Node):
         #)
         self.last_command_time = self.get_clock().now()
 
-
 def main(args=None):
     rclpy.init(args=args)
     listener = CommandDirection()
     try:
         rclpy.spin(listener)
-    except Exception as e:
-        print(f"Error in Command Direction : {e}")
-
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listener.get_logger().info("Shutting down")
+        listener.portHandler.closePort()
+        listener.destroy_node()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()
