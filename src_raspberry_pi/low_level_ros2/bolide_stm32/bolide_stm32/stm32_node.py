@@ -8,7 +8,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
-from std_msgs.msg import Float32MultiArray, Int16
+from std_msgs.msg import Float32MultiArray, Int16, Float32
 from sensor_msgs.msg import Range, Imu
 from bolide_interfaces.msg import ForkSpeed, MultipleRange
 
@@ -43,6 +43,7 @@ class STM32_Parser(Node):
         self.speed_pub = self.create_publisher(ForkSpeed, '/raw_fork_data', 10)
         self.ranges_pub = self.create_publisher(MultipleRange, '/raw_rear_range_data', 10)
         self.imu_pub = self.create_publisher(Imu, '/raw_imu_data', 10)
+        self.vbat_pub = self.create_publisher(Float32, '/battery_voltage', 10)
 
         # Subscribers
         self.get_cmd = self.create_subscription(Int16, '/stm32_data', self.get_command, 10)
@@ -51,7 +52,7 @@ class STM32_Parser(Node):
         self.sensor_data = Float32MultiArray()  # table for the sensors data (see sheet online)
 
         # Battery TODO - check it
-        self.vbat = 0.  # tension in the battery but it is not used because (maybe) it is broken
+        self.vbat_msg = Float32()
 
         # Infrared sensors
         self.ir_min_range = 0.06
@@ -161,7 +162,7 @@ class STM32_Parser(Node):
         # data = self.spi.xfer2([0x45]*20)  # SPI happens simultaneously, so we need to send to receive.
 
         if not self.crc32mpeg2(data):
-            self.vbat = (data[0] << 8) | data[1]  # UNIT??? It's just an ADC, but I think it clips bc it's always 4095 lmao
+            bat_adc_raw = (data[0] << 8) | data[1]   # valeur ADC brute : Le STM32 a un ADC 12 bits, il quantifie sur 4096 valeurs
             self.yaw = ((data[2] << 8) | data[3])/-900.  # rad
             self.ir_gauche = (data[4] << 8) | data[5]  # mV
             self.ir_droit = (data[6] << 8) | data[7]
@@ -174,6 +175,15 @@ class STM32_Parser(Node):
 
             self.fork_data.speed = self.speed
             self.fork_data.header.stamp = self.get_clock().now().to_msg()
+
+            #######@######### Conversion ADC -> Volts ########################
+            # théorie :
+                # bat_adc = bat_adc_raw << 3  # les valeurs ADC semblent décalées de 3 bits. Si c'est vrai => bat_adc : 0 <-> 4095
+                # v_adc = bat_adc * (3.3 / 4095.0)  # conversion ADC -> Volts (V_ADC) : entre 0V et 3.3V
+                # vbat = v_adc * ((1000 + 560) / 560)   # Pont diviseur de tension dans le schema du Hat : V_ADC = VS * (R3 / (R4 + R3)) avec R3=560, R4=1k
+
+            vbat = bat_adc_raw * 8 * (3.3 / 4095.0) * (1560 / 560)  # tension de la batterie en V
+            self.vbat_msg.data = float(vbat)
 
             ##########################  RANGES  #############################
 
@@ -226,6 +236,7 @@ class STM32_Parser(Node):
         self.speed_pub.publish(self.fork_data)
         self.ranges_pub.publish(self.multi_range_frame)
         self.imu_pub.publish(self.imu_data)
+        self.vbat_pub.publish(self.vbat_msg)
 
 
 def main(args=None):

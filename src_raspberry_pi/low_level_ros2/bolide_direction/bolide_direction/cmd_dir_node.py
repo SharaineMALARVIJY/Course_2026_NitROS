@@ -19,7 +19,7 @@ DXL_RESOLUTION = 1023.0
 DXL_FULL_RANGE_DEG = 300.0
 
 # --- Direction limits ---
-MAX_STEERING_ANGLE_DEG = 22.0 #(en vrai c'est 15.5 mais pas le temps de trouver le probleme)
+# MAX_STEERING_ANGLE_DEG = 22.0 #(en vrai c'est 15.5 mais pas le temps de trouver le probleme)
 
 # --- Mechanical geometry ---
 SERVO_ARM_LENGTH_MM = 15.0
@@ -27,7 +27,8 @@ STEERING_LINK_LENGTH_MM = 25.0
 STEERING_OFFSET_MM = 4.35
 
 # --- Servo zero calibration ---
-SERVO_ZERO_DEG = 62.0
+SERVO_ZERO_DEG = 60.0 # (old 62.0) # car moteur code sur 300° => vertical à 150° = 60° + 90°
+# L'angle moteur diminue côté axe de transmission
 
 # --- Motor conversion ---
 DXL_RAD_PER_UNIT = 5.24 / DXL_RESOLUTION
@@ -45,22 +46,23 @@ def pos2psi(pos):
 
     return psi_rad
 
-def degrees2pos(degrees):
-    """
-    Convert motor angle (deg) to DXL position
-    """
-    return int(
-        (degrees + SERVO_ZERO_DEG)
-        * (DXL_RESOLUTION / DXL_FULL_RANGE_DEG)
-    )
-
 
 class CommandDirection(Node):
+
+    def degrees2pos(self,degrees):
+        """
+        Convert motor angle (deg) to DXL position
+        """
+        return int(
+            (degrees + SERVO_ZERO_DEG)
+            * (DXL_RESOLUTION / DXL_FULL_RANGE_DEG)
+        )
+
     def set_dir_deg(self,steering_angle_deg):
         """
         Convert steering angle (deg) to motor position (DXL units)
         """
-        psi_rad = math.radians(steering_angle_deg)
+        psi_rad = math.radians(steering_angle_deg + self.STEERING_OFFSET_DEG)
 
         lever_projection = (
             STEERING_LINK_LENGTH_MM * math.sin(psi_rad)
@@ -71,9 +73,9 @@ class CommandDirection(Node):
         theta_deg = math.degrees(theta_rad)
 
         if self.debug:  # for debug
-            self.get_logger().debug(f"TARGET STEERING ANGLE : {steering_angle_deg:.3f}° -> TARGET MOTOR ANFLE (+offset): {theta_deg:.3f} ({theta_deg+SERVO_ZERO_DEG:.3f}) \r\n")
+            self.get_logger().info(f"TARGET STEERING ANGLE : {steering_angle_deg:.3f}° -> TARGET MOTOR ANGLE (+offset): {theta_deg:.3f} ({theta_deg+SERVO_ZERO_DEG:.3f}) \r\n")
 
-        return degrees2pos(theta_deg)
+        return self.degrees2pos(theta_deg)
 
     def __init__(self):
         super().__init__('cmd_dir_node')
@@ -84,6 +86,11 @@ class CommandDirection(Node):
         self.debug = self.get_parameter('debug').get_parameter_value().bool_value
         if self.debug:
             rclpy.logging.set_logger_level('cmd_dir', 10)  # 10 is for DEBUG level
+        
+        self.declare_parameter('steering_offset_deg', -1.5)
+        self.STEERING_OFFSET_DEG = self.get_parameter('steering_offset_deg').value
+        self.declare_parameter('max_steering_angle', 22.0)
+        self.MAX_STEERING_ANGLE_DEG = self.get_parameter('max_steering_angle').value
 
         # Dynamixel stuff:
         # Protocol version
@@ -97,8 +104,6 @@ class CommandDirection(Node):
         # udev rule in /etc/udev/rules.d/99-usb-dynamixel.rules:
         # SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", SYMLINK+="ttyU2D2", MODE="0777"
         # see tutorials.md
-
-        self.MAX_STEERING_ANGLE_DEG = MAX_STEERING_ANGLE_DEG
 
         self.target_steering_angle_deg = 0.0
         self.curr_steering_angle_deg = 0.0

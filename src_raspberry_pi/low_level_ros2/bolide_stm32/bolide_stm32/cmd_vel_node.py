@@ -41,7 +41,7 @@ class CommandSpeedNode(Node):
 
         # deadzone de cmd_vel (must be positif) -> DEADZONE in [PWM_NEUTRAL ± VEL_DEADZONE]
         self.declare_parameter('cmd_vel_deadzone', 0.01)
-        self.CMD_VEL_DEADZONE = self.get_parameter('cmd_vel_deadzone').value - 1e-6 # 1e-6 car de problème de get_parameter sur float
+        self.CMD_VEL_DEADZONE = self.get_parameter('cmd_vel_deadzone').value - 1e-6 # 1e-6 car c'est un float64 (float64 > float32)
         # temps max sans commande avant neutre    
         self.SAFETY_TIMEOUT = 0.5
 

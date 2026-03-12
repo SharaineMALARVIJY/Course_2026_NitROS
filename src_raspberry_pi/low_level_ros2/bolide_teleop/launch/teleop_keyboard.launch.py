@@ -37,7 +37,7 @@ def generate_launch_description():
         name="cmd_vel_node",
         output="screen",
         respawn=restart_on_error,
-        parameters=[{"debug": True},
+        parameters=[{"debug": False},
                     {'cmd_vel_deadzone': 0.01},
                     {'pwm_forward_max': 2000},  # <= 2000 (ESC max)
                     {'pwm_forward_min': 1540},
@@ -51,7 +51,9 @@ def generate_launch_description():
         output="screen",
         respawn=restart_on_error,
         parameters=[{"debug": False},
-                    {'baudrate': 1000000}],
+                    {'baudrate': 1000000},
+                    {'max_steering_angle': 21.0},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
+                    {'steering_offset_deg': -1.5}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
     )
     teleop_keyboard = Node(
         package="bolide_teleop",
