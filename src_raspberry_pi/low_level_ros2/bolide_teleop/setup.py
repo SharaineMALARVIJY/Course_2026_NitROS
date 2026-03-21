@@ -23,6 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'sensors=bolide_teleop.sensors:main',
             'teleop_keyboard=bolide_teleop.teleop_keyboard:main',
         ],
     },
