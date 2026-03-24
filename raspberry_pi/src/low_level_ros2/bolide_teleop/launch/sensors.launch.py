@@ -70,17 +70,35 @@ def generate_launch_description():
         output="screen",
     )
     tf_base_to_link = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="tf_base_to_link",
-        arguments=["0", "0", "0", "0", "0", "0", "base_footprint", "base_link"]
+    package="tf2_ros",
+    executable="static_transform_publisher",
+    name="tf_base_to_link",
+    arguments=[
+        "--x", "0",
+        "--y", "0",
+        "--z", "0",
+        "--roll", "0",
+        "--pitch", "0",
+        "--yaw", "0",
+        "--frame-id", "base_footprint",
+        "--child-frame-id", "base_link",
+        ]
     )
 
     tf_link_to_laser = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name="tf_link_to_laser",
-        arguments=["0.18", "0", "0.10", "3.14159265359", "0", "0", "base_link", "laser_frame"]
+        arguments=[
+            "--x", "0.18",
+            "--y", "0",
+            "--z", "0.10",
+            "--roll", "3.14159265359",
+            "--pitch", "0",
+            "--yaw", "0",
+            "--frame-id", "base_link",
+            "--child-frame-id", "laser_frame",
+        ]
     )
     teleop_keyboard = Node(
         package="bolide_teleop",
@@ -117,6 +135,6 @@ def generate_launch_description():
             cmd_dir_node,
             cmd_vel_bridge_node,
             #teleop_keyboard,
-            shutdown_on_teleop_exit,
+            #shutdown_on_teleop_exit,
         ]
     )
