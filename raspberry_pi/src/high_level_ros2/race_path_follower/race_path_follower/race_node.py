@@ -139,19 +139,26 @@ def main() -> None:
     for lap in range(laps):
         logger.info(f"Starting lap {lap+1}/{laps}")
         #lap_goals = [make_pose(navigator, p) for p in goal_points_one_lap]
-        navigator.goThroughPoses(lap_goals)
 
-        i = 0
-        while not navigator.isTaskComplete():
-            i += 1
-            feedback = navigator.getFeedback()
-            if feedback and i % log_freq == 0:
-                logger.info(f"Lap {lap+1}: remaining {feedback.distance_remaining:.2f} m")
+        for goal in lap_goals:
+            navigator.goToPose(goal)
 
-        result = navigator.getResult()
-        if result != TaskResult.SUCCEEDED:
-            logger.error(f"Lap {lap+1} failed")
-            break
+            i = 0
+            while not navigator.isTaskComplete():
+                i += 1
+                feedback = navigator.getFeedback()
+                if feedback and i % log_freq == 0:
+                    logger.info(f"Lap {lap+1}: remaining {feedback.distance_remaining:.2f} m")
+
+            result = navigator.getResult()
+            if result == TaskResult.SUCCEEDED:
+                print('Goal succeeded!')
+            elif result == TaskResult.CANCELED:
+                print('Goal was canceled!')
+            elif result == TaskResult.FAILED:
+                print('Goal failed!')
+            else:
+                print('Goal has an invalid return status!')
 
     navigator.destroy_node()
     rclpy.shutdown()
