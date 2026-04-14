@@ -1,4 +1,6 @@
 import math
+import time as t
+
 import rclpy
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -13,15 +15,57 @@ def yaw_to_quaternion(yaw: float) -> Quaternion:
     return q
 
 
-def make_pose(navigator, p, frame_id: str = "map") -> PoseStamped:
+def make_pose(navigator: BasicNavigator, p, frame_id: str = "map") -> PoseStamped:
     pose = PoseStamped()
     pose.header.frame_id = frame_id
     pose.header.stamp = navigator.get_clock().now().to_msg()
-    pose.pose.position.x = p[0]
-    pose.pose.position.y = p[1]
+    pose.pose.position.x = float(p[0])
+    pose.pose.position.y = float(p[1])
     pose.pose.position.z = 0.0
-    pose.pose.orientation = yaw_to_quaternion(p[2])
+    pose.pose.orientation = yaw_to_quaternion(float(p[2]))
     return pose
+
+
+def validate_point(logger, name: str, p) -> bool:
+    if not isinstance(p, (list, tuple)) or len(p) != 3:
+        logger.error(f"{name} must contain exactly 3 values: [x, y, yaw]")
+        return False
+    return True
+
+
+def wait_for_keyboard_start() -> None:
+    while True:
+        key = input("Tape 'd' puis Entrée pour démarrer : ").strip().lower()
+        if key == "d":
+            return
+        print("Commande invalide. Tape seulement 'd'.")
+
+
+def wait_for_task_result(navigator: BasicNavigator, logger, lap: int, goal_idx: int, log_freq: int):
+    i = 0
+    while not navigator.isTaskComplete():
+        i += 1
+        feedback = navigator.getFeedback()
+        if feedback and i % log_freq == 0:
+            distance = getattr(feedback, "distance_remaining", None)
+            if distance is not None:
+                logger.info(
+                    f"Lap {lap}: goal {goal_idx}: remaining {distance:.2f} m"
+                )
+        t.sleep(0.05)
+
+    return navigator.getResult()
+
+
+def run_recovery(navigator: BasicNavigator, logger) -> None:
+    logger.warn("Recovery: backup")
+    navigator.backup(backup_dist=0.3, backup_speed=0.5, time_allowance=2)
+
+    while not navigator.isTaskComplete():
+        t.sleep(0.05)
+
+    recovery_result = navigator.getResult()
+    logger.info(f"Recovery result: {recovery_result}")
 
 
 def main() -> None:
@@ -33,6 +77,7 @@ def main() -> None:
     navigator.declare_parameter("reverse", False)
     navigator.declare_parameter("laps", 1)
     navigator.declare_parameter("log_frequency", 5)
+    navigator.declare_parameter("max_retries", 30)
 
     navigator.declare_parameter("p0", [0.0, 0.0, 0.0])
 
@@ -52,8 +97,9 @@ def main() -> None:
     navigator.declare_parameter("p4_reverse", [0.0, 0.0, 0.0])
 
     reverse = navigator.get_parameter("reverse").value
-    laps = navigator.get_parameter("laps").value
-    log_freq = navigator.get_parameter("log_frequency").value
+    laps = int(navigator.get_parameter("laps").value)
+    log_freq = int(navigator.get_parameter("log_frequency").value)
+    max_retries = int(navigator.get_parameter("max_retries").value)
 
     p0 = navigator.get_parameter("p0").value
 
@@ -72,6 +118,11 @@ def main() -> None:
     p3_reverse = navigator.get_parameter("p3_reverse").value
     p4_reverse = navigator.get_parameter("p4_reverse").value
 
+    if not validate_point(logger, "p0", p0):
+        navigator.destroy_node()
+        rclpy.shutdown()
+        return
+
     if reverse:
         logger.info("Reverse mode enabled")
         selected_points = {
@@ -89,21 +140,20 @@ def main() -> None:
         }
 
     for name, p in selected_points.items():
-        if len(p) != 3:
-            logger.error(f"{name} must contain exactly 3 values: [x, y, yaw]")
+        if not validate_point(logger, name, p):
             navigator.destroy_node()
             rclpy.shutdown()
             return
 
     goal_points_one_lap = []
     if use_p1:
-        goal_points_one_lap.append(selected_points["p1"])
+        goal_points_one_lap.append(("p1", selected_points["p1"]))
     if use_p2:
-        goal_points_one_lap.append(selected_points["p2"])
+        goal_points_one_lap.append(("p2", selected_points["p2"]))
     if use_p3:
-        goal_points_one_lap.append(selected_points["p3"])
+        goal_points_one_lap.append(("p3", selected_points["p3"]))
     if use_p4:
-        goal_points_one_lap.append(selected_points["p4"])
+        goal_points_one_lap.append(("p4", selected_points["p4"]))
 
     if not goal_points_one_lap:
         logger.error("No active goal points. Enable at least one of use_p1..use_p4")
@@ -123,10 +173,16 @@ def main() -> None:
         rclpy.shutdown()
         return
 
+    if max_retries < 1:
+        logger.error("max_retries must be >= 1")
+        navigator.destroy_node()
+        rclpy.shutdown()
+        return
 
     logger.info(f"Initial pose: {p0}")
     logger.info(f"Active goals per lap: {len(goal_points_one_lap)}")
     logger.info(f"Total goals over all laps: {len(goal_points_one_lap) * laps}")
+    logger.info(f"Max retries per goal: {max_retries}")
 
     navigator.setInitialPose(make_pose(navigator, p0))
 
@@ -134,32 +190,57 @@ def main() -> None:
     navigator.waitUntilNav2Active()
     logger.info("Nav2 ready")
 
-    lap_goals = [make_pose(navigator, p) for p in goal_points_one_lap]
+    wait_for_keyboard_start()
 
-    for lap in range(laps):
-        logger.info(f"Starting lap {lap+1}/{laps}")
-        #lap_goals = [make_pose(navigator, p) for p in goal_points_one_lap]
+    for lap in range(1, laps + 1):
+        logger.info(f"Starting lap {lap}/{laps}")
 
-        for goal in lap_goals:
-            navigator.goToPose(goal)
+        for goal_idx, (goal_name, goal_values) in enumerate(goal_points_one_lap, start=1):
+            success = False
 
-            i = 0
-            while not navigator.isTaskComplete():
-                i += 1
-                feedback = navigator.getFeedback()
-                if feedback and i % log_freq == 0:
-                    logger.info(f"Lap {lap+1}: remaining {feedback.distance_remaining:.2f} m")
+            for attempt in range(1, max_retries + 1):
+                goal = make_pose(navigator, goal_values)
 
-            result = navigator.getResult()
-            if result == TaskResult.SUCCEEDED:
-                print('Goal succeeded!')
-            elif result == TaskResult.CANCELED:
-                print('Goal was canceled!')
-            elif result == TaskResult.FAILED:
-                print('Goal failed!')
-            else:
-                print('Goal has an invalid return status!')
+                logger.info(
+                    f"Lap {lap}: sending {goal_name} "
+                    f"({goal_idx}/{len(goal_points_one_lap)}) "
+                    f"attempt {attempt}/{max_retries}"
+                )
 
+                navigator.goToPose(goal)
+                result = wait_for_task_result(navigator, logger, lap, goal_idx, log_freq)
+
+                if result == TaskResult.SUCCEEDED:
+                    logger.info(f"Lap {lap}: {goal_name} succeeded")
+                    success = True
+                    break
+
+                if result == TaskResult.CANCELED:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} canceled "
+                        f"({attempt}/{max_retries})"
+                    )
+                elif result == TaskResult.FAILED:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} failed "
+                        f"({attempt}/{max_retries})"
+                    )
+                    run_recovery(navigator, logger)
+                else:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} unknown result={result} "
+                        f"({attempt}/{max_retries})"
+                    )
+
+                t.sleep(0.2)
+
+            if not success:
+                logger.error(
+                    f"Lap {lap}: {goal_name} reached max retries "
+                    f"({max_retries}), skipping"
+                )
+
+    logger.info("All laps completed.")
     navigator.destroy_node()
     rclpy.shutdown()
 

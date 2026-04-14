@@ -63,7 +63,7 @@ def print_course(vects, reversed_vects):
     print("\n")
 
     for i in range(len(vects)):
-        print(f"    p{i}: true")
+        print(f"    use_p{i}: true")
 
     print("\n")
 
@@ -73,7 +73,7 @@ def print_course(vects, reversed_vects):
     print("\n")
 
     for i in range(1, len(reversed_vects)):
-        print(f"    p{i}: {reversed_vects[i]}")
+        print(f"    p{i}_reverse: {reversed_vects[i]}")
 
 
 def onclick(event, resolution, origin, height):
@@ -89,10 +89,10 @@ def onclick(event, resolution, origin, height):
     vects = to_vect(x_y_reals)
 
 
-yaml_path = "map_etage_2.yaml"
-image_path = "map_etage_2_cleaned.pgm"
+yaml_path = "final.yaml"
+image_path = "final.pgm"
 
-image = open_image(image_path, True)
+image = open_image(image_path, False)
 resolution, origin = get_resolution_origin(yaml_path)
 height, width = image.shape
 

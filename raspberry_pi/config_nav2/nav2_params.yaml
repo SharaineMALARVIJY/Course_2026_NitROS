@@ -1,44 +1,3 @@
-# =============================================================================
-# nav2_params.yaml — Robot Ackermann (voiture autonome)
-# Plateforme : ROS2 Jazzy
-# Capteurs   : RPLidar (/scan, frame: laser_frame)
-# Odom       : nœud custom (v + Yaw IMU) → /odom, TF odom→base_footprint
-# SLAM       : slam_toolbox (online asynchronous)
-# Planner    : SmacPlannerHybrid (Hybrid A*)
-# Controller : RegulatedPurePursuitController
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# AMCL — NON UTILISÉ (slam_toolbox gère la localisation)
-# Conservé pour référence mais ne pas lancer ce nœud.
-# -----------------------------------------------------------------------------
-# amcl:
-#   ros__parameters:
-#     base_frame_id: "base_footprint"
-#     global_frame_id: "map"
-#     odom_frame_id: "odom"
-#     scan_topic: /scan
-#     robot_model_type: "nav2_amcl::DifferentialMotionModel"
-#     tf_broadcast: false  # slam_toolbox publie la TF map→odom
-#     introspection_mode: "disabled"
-
-
-# amcl:
-#   ros__parameters:
-#     use_sim_time: false
-#     laser_max_range: 20.0                                # default: 100.0
-#     robot_model_type: "nav2_amcl::DifferentialMotionModel"       # default
-#     set_initial_pose: true                               # default: false
-#     initial_pose:
-#       x: 0.0
-#       y: 0.0
-#       z: 0.0
-#       yaw: 0.0
-#       tf_broadcast: false
-#       introspection_mode: "disabled"
-# -----------------------------------------------------------------------------
-# BT Navigator
-# -----------------------------------------------------------------------------
 bt_navigator:
   ros__parameters:
     global_frame: map
@@ -75,15 +34,14 @@ bt_navigator:
       - smoother
       - wait
 
-# -----------------------------------------------------------------------------
-# Controller Server — Regulated Pure Pursuit (Ackermann)
-# -----------------------------------------------------------------------------
+
+
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
     costmap_update_timeout: 0.50 # 0.30
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.001   # 0.0 latéral pour Ackermann
+    min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
@@ -93,24 +51,21 @@ controller_server:
     use_realtime_priority: false
     speed_limit_topic: "speed_limit"
 
-    # --- Progress checker ---
     progress_checker:
       plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.5 #m
       movement_time_allowance: 10.0 #s
 
-    # --- Goal checker ---
     general_goal_checker:
       plugin: "nav2_controller::PositionGoalChecker"
-      stateful: true
-      xy_goal_tolerance: 0.5 #m
-      path_length_tolerance: 1 #m
+      stateful: false
+      xy_goal_tolerance: 1.0 #m
+      path_length_tolerance: 1.0 #m
 
-    # --- Path handler (cinématique Ackermann) ---
     PathHandler:
       plugin: "nav2_controller::FeasiblePathHandler"
       prune_distance: 2.0
-      enforce_path_inversion: true    # important pour Ackermann
+      enforce_path_inversion: true
       enforce_path_rotation: false
       inversion_xy_tolerance: 0.2
       inversion_yaw_tolerance: 0.4
@@ -122,14 +77,14 @@ controller_server:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
       # Vitesses limites
-      desired_linear_vel: 1.0          # vitesse de croisière (m/s)
+      desired_linear_vel: 1.2          # vitesse de croisière (m/s)
       max_linear_accel: 2.5            # accélération max (m/s²)
       max_linear_decel: 2.5            # décélération max (m/s²)
 
       # Lookahead
-      lookahead_dist: 0.6              # distance lookahead fixe (m)
-      min_lookahead_dist: 0.3          # lookahead minimum (m)
-      max_lookahead_dist: 0.9          # lookahead maximum (m)
+      lookahead_dist: 0.4              # distance lookahead fixe (m)
+      min_lookahead_dist: 0.1          # lookahead minimum (m)
+      max_lookahead_dist: 1.5          # lookahead maximum (m)
       lookahead_time: 1.5              # temps lookahead adaptatif (s)
       use_velocity_scaled_lookahead_dist: true  # lookahead dynamique selon vitesse
 
@@ -140,7 +95,7 @@ controller_server:
 
       # Régulation de vitesse en courbe
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.5   # rayon en dessous duquel on ralentit
+      regulated_linear_scaling_min_radius: 0.3   # rayon en dessous duquel on ralentit
       regulated_linear_scaling_min_speed: 0.25   # vitesse min en courbe serrée
 
       # Régulation par proximité des obstacles
@@ -161,30 +116,30 @@ controller_server:
       # Direction
       allow_reversing: true            # passer à true si marche arrière supportée
 
-# -----------------------------------------------------------------------------
-# Local Costmap
-# Utilise ObstacleLayer 2D (LiDAR 2D RPLidar) + InflationLayer
-# Footprint polygonal adapté à une petite voiture (~40x20 cm)
-# -----------------------------------------------------------------------------
+      use_dynamic_window : true
+      # allow_obstacle_checking_beyond_goal: true
+
+
+
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 14.0
+      publish_frequency: 7.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
       width: 4
       height: 4
       resolution: 0.05
-      # Footprint polygonal (à adapter aux dimensions réelles du robot en mètres)
+      # Footprint polygonal (40x20 cm)
       # Format : [[avant_gauche], [avant_droite], [arrière_droite], [arrière_gauche]]
       footprint: "[[0.20, 0.10], [0.20, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.35
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.20
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -202,9 +157,8 @@ local_costmap:
       always_send_full_costmap: true
       introspection_mode: "disabled"
 
-# -----------------------------------------------------------------------------
-# Global Costmap
-# -----------------------------------------------------------------------------
+
+
 global_costmap:
   global_costmap:
     ros__parameters:
@@ -212,7 +166,6 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      # Même footprint que local costmap
       footprint: "[[0.20, 0.10], [0.20, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
       resolution: 0.05
       track_unknown_space: true
@@ -236,35 +189,19 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.30
       always_send_full_costmap: true
       introspection_mode: "disabled"
 
-# -----------------------------------------------------------------------------
-# Map Server / Saver
-# -----------------------------------------------------------------------------
-map_server:
-  ros__parameters:
-    introspection_mode: "disabled"
 
-map_saver:
-  ros__parameters:
-    save_map_timeout: 5.0
-    free_thresh_default: 0.25
-    occupied_thresh_default: 0.65
-    map_subscribe_transient_local: true
-    introspection_mode: "disabled"
 
-# -----------------------------------------------------------------------------
-# Planner Server — Smac Hybrid A* (contraint Ackermann)
-# -----------------------------------------------------------------------------
 planner_server:
   ros__parameters:
     planner_plugins: ["GridBased"]
-    expected_planner_frequency: 5.0 #10.0
-    allow_partial_planning: false
-    costmap_update_timeout: 2.0 #1.0
+    expected_planner_frequency: 2.0 #10.0
+    allow_partial_planning: true
+    costmap_update_timeout: 1.0
     introspection_mode: "disabled"
 
     GridBased:
@@ -280,16 +217,16 @@ planner_server:
       analytic_expansion_max_cost_override: false
 
       # Contrainte cinématique Ackermann
-      minimum_turning_radius: 0.80        # rayon de braquage minimum (m) — À MESURER sur le robot
+      minimum_turning_radius: 0.85        # rayon de braquage minimum (m)
 
       # Heuristique
       max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 10.0 #5.0
-      motion_model_for_search: "REEDS_SHEPP"  # ou "DUBIN" si marche arrière interdite
+      max_planning_time: 5.0
+      motion_model_for_search: "REEDS_SHEPP"  # ou "DUBIN" si marche arrière sinon REEDS_SHEPP
 
       # Coûts
-      cost_travel_multiplier: 2.0
+      cost_travel_multiplier: 6.0
       angle_quantization_bins: 72
 
       # Lissage intégré (post-processing du chemin Hybrid A*)
@@ -303,14 +240,13 @@ planner_server:
         refinement_num: 2
 
       # Tolérance sur l'objectif
-      tolerance: 0.25
+      tolerance: 1.0
       allow_unknown: true
       lookup_table_size: 10.0 #20.0
       debug_visualizations: false
 
-# -----------------------------------------------------------------------------
-# Smoother Server
-# -----------------------------------------------------------------------------
+
+
 smoother_server:
   ros__parameters:
     smoother_plugins: ["simple_smoother"]
@@ -319,13 +255,11 @@ smoother_server:
       tolerance: 1.0e-10
       max_its: 1000
       refinement_num: 2
-      enforce_path_inversion: true   # Ackermann : respecter les inversions de direction
+      enforce_path_inversion: true
       do_refinement: true
 
-# -----------------------------------------------------------------------------
-# Behavior Server
-# "spin" DÉSACTIVÉ — Ackermann ne peut pas tourner sur place
-# -----------------------------------------------------------------------------
+
+
 behavior_server:
   ros__parameters:
     local_costmap_topic: local_costmap/costmap_raw
@@ -334,8 +268,6 @@ behavior_server:
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
     behavior_plugins: ["backup", "drive_on_heading", "wait"]
-    # "spin" supprimé : impossible sur Ackermann
-    # "assisted_teleop" supprimé : non requis
     backup:
       plugin: "nav2_behaviors::BackUp"
       acceleration_limit: 2.5
@@ -353,13 +285,11 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.0    # Ackermann : pas de rotation sur place
+    max_rotational_vel: 0.0
     min_rotational_vel: 0.0
     rotational_acc_lim: 0.0
 
-# -----------------------------------------------------------------------------
-# Waypoint Follower
-# -----------------------------------------------------------------------------
+
 waypoint_follower:
   ros__parameters:
     loop_rate: 20
@@ -371,9 +301,7 @@ waypoint_follower:
       enabled: true
       waypoint_pause_duration: 200
 
-# -----------------------------------------------------------------------------
-# Velocity Smoother
-# -----------------------------------------------------------------------------
+
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 20.0
@@ -388,14 +316,11 @@ velocity_smoother:
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
-# -----------------------------------------------------------------------------
-# Collision Monitor
-# base_frame_id : base_footprint (cohérent avec ton nœud odom)
-# -----------------------------------------------------------------------------
+
 collision_monitor:
   ros__parameters:
     enabled: true
-    base_frame_id: "base_footprint"
+    base_frame_id: "base_link"
     odom_frame_id: "odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
     cmd_vel_out_topic: "cmd_vel"
@@ -422,6 +347,17 @@ collision_monitor:
       max_height: 2.0
       enabled: true
 
+map_server:
+  ros__parameters:
+    introspection_mode: "disabled"
+
+map_saver:
+  ros__parameters:
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: true
+    introspection_mode: "disabled"
 
 docking_server:
   ros__parameters:
