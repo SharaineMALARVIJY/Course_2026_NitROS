@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import Float32
-from bolide_interfaces.msg import SpeedDirection
+from bolide_interfaces.msg import SpeedDirection, ForkSpeed
 
 
 class KeyboardController(Node):
@@ -21,7 +21,7 @@ class KeyboardController(Node):
         self.debug = self.get_parameter('debug').value
 
         # create publish of speed and direction
-        self.speed_pub = self.create_publisher(Float32, '/cmd_vel', 10)
+        self.speed_pub = self.create_publisher(Float32, '/cmd_speed_target', 10)
         self.direction_pub = self.create_publisher(Float32, '/cmd_dir', 10)
 
         # Timer for the data
@@ -34,25 +34,38 @@ class KeyboardController(Node):
         self.current_direction = 0.0
         
         # Speed and direction increments
-        self.declare_parameter('speed_increment', 0.04)                         # 4% increment per key press
+        self.declare_parameter('speed_increment', 0.1)                         # 4% increment per key press
         self.speed_increment = self.get_parameter('speed_increment').value
         self.declare_parameter('direction_increment', 0.2)                      # 20% increment per key press
         self.direction_increment = self.get_parameter('direction_increment').value
+        
+        self.declare_parameter('max_speed_forward', 3.0)
+        self.declare_parameter('max_speed_reverse', 1.5)
+        self.max_speed_forward = self.get_parameter('max_speed_forward').value
+        self.max_speed_reverse = self.get_parameter('max_speed_reverse').value
         
         self.key_mapping = {
             '\x1b[A': 'UP',     
             '\x1b[B': 'DOWN',
             '\x1b[C': 'RIGHT',
             '\x1b[D': 'LEFT', 
-            's': 'BRAKE', 
+            's': 'STRAIGHT', 
             'q': 'QUIT', 
-            'n': 'NEUTRAL',
-            'r': 'DIRECTION REVERSAL'
+            'a': 'HALT',
+            'r': 'DIRECTION REVERSAL',
+            'v': 'VOLTAGE'
         }
-        key_mapping_str = '\n'.join([f'\t{value}' for value in self.key_mapping.values()])
+        key_mapping_str = '\n'.join([f'\t{key} : {value}' for key, value in self.key_mapping.items()])
         self.get_logger().info(f"[INFO] -- Key control mapping:\n{key_mapping_str}")
 
         self.running = True
+
+        # info subscription
+        self.create_subscription(Float32, '/battery_voltage',  self.cb_vbat, 10)
+        self.vbat = 0.0
+
+    def cb_vbat(self, msg: Float32):
+        self.vbat = msg.data
 
     def timer_callback(self):
         """Callback function of the timer to publish data to speed and direction topics
@@ -60,7 +73,11 @@ class KeyboardController(Node):
         if self.debug:
             self.get_logger().debug(f"[DEBUG] -- current speed = {self.current_speed}\n\r")
             self.get_logger().debug(f"[DEBUG] -- current direction = {self.current_direction}\n\r")
-        self.speed_pub.publish(Float32(data=self.current_speed))
+        if self.current_speed > 0 :
+            self.speed_pub.publish(Float32(data=self.current_speed * self.max_speed_forward))
+        else :
+            self.speed_pub.publish(Float32(data=self.current_speed * self.max_speed_reverse))
+            
         self.direction_pub.publish(Float32(data=self.current_direction))
     
         
@@ -117,12 +134,9 @@ class KeyboardController(Node):
             if self.current_direction > 1.0:
                 self.current_direction = 1.0
                 
-        elif action == 'BRAKE':
-            # Stop immediately 
-            # Brake activates only if car is currently Forward, else car goes in Neutral
-            # the brake sequence finishes in Neutral
-            self.current_speed = 0.0     # cmd_vel = 0 : brake if car goes forward
-            # Note : cmd_vel dans la deadzone sans changement de direction -> Neutral (no brake)
+        elif action == 'STRAIGHT':
+            # sets the steering direction to neutral
+            self.current_direction = 0.0
             
         elif action == 'QUIT':
             # Set to neutral before quitting
@@ -130,14 +144,18 @@ class KeyboardController(Node):
             self.current_direction = 0.0
             self.running = False
             
-        elif action == 'NEUTRAL':
+        elif action == 'HALT':
             # Reset speed and direction to neutral
             self.current_speed = 0.0
             self.current_direction = 0.0
+            # Note : brake si cmd_vel = 0.0
 
         elif action == 'DIRECTION REVERSAL':
             # Reverse drive direction with same speed (not steering direction)
             self.current_speed = -self.current_speed
+        
+        elif action == 'VOLTAGE':
+            self.get_logger().info(f"\r[VBAT] tension = {self.vbat:.2f} V                                                      \r")
 
         else:
             self.get_logger().warn(f"Unknown action: {action}")

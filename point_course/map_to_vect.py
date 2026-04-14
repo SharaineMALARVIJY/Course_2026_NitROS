@@ -74,8 +74,8 @@ def onclick(event, resolution, origin, height):
     vects = to_vect(x_y_reals)
 
 
-yaml_path = "maps_course_2026/final.yaml"
-image_path = "maps_course_2026/final.pgm"
+yaml_path = "map_etage_2_cleaned.yaml"
+image_path = "map_etage_2_cleaned.pgm"
 
 image = open_image(image_path, False)
 resolution, origin = get_resolution_origin(yaml_path)

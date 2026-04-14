@@ -43,7 +43,7 @@ class CommandSpeedNode(Node):
         self.timer_safety = self.create_timer(self.SAFETY_TIMEOUT,self.emergency_stop)
 
         # Sub
-        self.subscriber = self.create_subscription(Float32, "/cmd_vel", self.cmd_callback, 10)
+        self.subscriber = self.create_subscription(Float32, "/cmd_speed", self.cmd_callback, 10)
 
         
 

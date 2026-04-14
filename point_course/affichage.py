@@ -34,8 +34,8 @@ def coord_to_pix(x, y, resolution, origin, height):
 # ========================
 # FICHIERS
 # ========================
-yaml_path = "maps_course_2026/final.yaml"
-image_path = "maps_course_2026/final.pgm"
+yaml_path = "map_etage_2_cleaned.yaml"
+image_path = "map_etage_2_cleaned.pgm"
 
 image = open_image(image_path, False)
 resolution, origin = get_resolution_origin(yaml_path)
@@ -88,6 +88,15 @@ points = [
     [-7.122, 0.9170000000000007, 1.6092389168160846],
     [-1.072, 2.5170000000000003, -1.6162196062164735],
     [-1.072, -2.9829999999999997, -1.6447353644528366],
+]
+
+#etage 2 map_etage_2_cleaned
+points = [
+    [-3.049, 28.293, -1.316],
+    [-3.001999999999999, 25.145000000000003, -2.228684931977106],
+    [-5.501999999999999, 24.445000000000007, 1.8804992713373532],
+    [-6.051999999999999, 27.345000000000006, 1.3258176636680317],
+    [-3.8519999999999985, 29.795, -1.0603080048781213],
 ]
 
 labels = ["p0", "p1", "p2", "p3", "p4"]

@@ -131,12 +131,14 @@ class STM32_Parser(Node):
         self.multi_range_frame.ir_rear_left.radiation_type = Range.INFRARED
         self.multi_range_frame.ir_rear_left.min_range = self.ir_min_range
         self.multi_range_frame.ir_rear_left.max_range = self.ir_max_range
+        self.multi_range_frame.ir_rear_left.field_of_view = 0.09   # ~5,15°
 
         self.multi_range_frame.ir_rear_right = Range()
         self.multi_range_frame.ir_rear_right.header.frame_id = "rear_ir_range_frame"
         self.multi_range_frame.ir_rear_right.radiation_type = Range.INFRARED
         self.multi_range_frame.ir_rear_right.min_range = self.ir_min_range
         self.multi_range_frame.ir_rear_right.max_range = self.ir_max_range
+        self.multi_range_frame.ir_rear_right.field_of_view = 0.09   # ~5,15°
 
         # Rear sonar sensor =============================================================
         # self.multi_range_frame.Sonar_rear = Range()
@@ -251,7 +253,7 @@ def main(args=None):
         except Exception as e:
             if rclpy.ok():  # On ignore les erreurs dues au shutdown
                 node.get_logger().error(f'Exception in spin: {e}')
-    
+
     thread = threading.Thread(target=spin_with_catch, args=(stm32_node,), daemon=True)
     thread.start()
 

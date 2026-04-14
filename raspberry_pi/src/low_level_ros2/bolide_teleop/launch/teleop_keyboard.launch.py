@@ -21,6 +21,8 @@ def generate_launch_description():
             {"inverted": False},
             {"angle_compensate": True},
             {"scan_mode": "Express"},
+            {"angle_min_filter": -1.75},    # -100° (extrème gauche)
+            {"angle_max_filter": 1.75}      # +100° (extrème droite)
         ]
     )
     stm32_node = Node(
@@ -37,12 +39,17 @@ def generate_launch_description():
         name="cmd_vel_node",
         output="screen",
         respawn=restart_on_error,
-        parameters=[{"debug": False},
-                    {'cmd_vel_deadzone': 0.01},
-                    {'pwm_forward_max': 2000},  # <= 2000 (ESC max)
-                    {'pwm_forward_min': 1540},
-                    {'pwm_reverse_min': 1460},
-                    {'pwm_reverse_max': 1000}], # >= 1000 (ESC min)
+        parameters=[{"debug": False}]
+    )
+    speed_controller = Node(
+    package='bolide_stm32',
+    executable='speed_controller_node',
+    parameters=[{
+        'debug': True,
+        'debug_freq': 2.0,
+        'max_speed_forward': 3.0,
+        'max_speed_reverse': 1.5
+    }]
     )
     cmd_dir_node = Node(
         package="bolide_direction",
@@ -53,7 +60,7 @@ def generate_launch_description():
         parameters=[{"debug": False},
                     {'baudrate': 1000000},
                     {'max_steering_angle': 21.0},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
-                    {'steering_offset_deg': -1.5}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
+                    {'steering_offset_deg': -1.2}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
     )
     teleop_keyboard = Node(
         package="bolide_teleop",
@@ -63,7 +70,7 @@ def generate_launch_description():
         respawn=restart_on_error,
         parameters=[
             {'debug': False},
-            {'speed_increment': 0.01},
+            {'speed_increment': 1.0/30.0},
             {'direction_increment': 0.2},
             {'rate': 10}                        # Hz
         ]
@@ -83,6 +90,7 @@ def generate_launch_description():
             sllidar,
             stm32_node,
             cmd_vel_node,
+            speed_controller,
             cmd_dir_node,
             teleop_keyboard,
             shutdown_on_teleop_exit,

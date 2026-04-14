@@ -21,9 +21,11 @@ setup(
     entry_points={
         'console_scripts': [
             'stm32_node = bolide_stm32.stm32_node:main',
+            'cmd_twist_bridge_node = bolide_stm32.cmd_twist_bridge_node:main',
             'cmd_vel_node = bolide_stm32.cmd_vel_node:main',
             'esc_setup = bolide_stm32.esc_setup:main',
             'odom_node = bolide_stm32.odom_node:main',
+            'speed_controller_node = bolide_stm32.speed_controller_node:main',
         ],
     },
 )

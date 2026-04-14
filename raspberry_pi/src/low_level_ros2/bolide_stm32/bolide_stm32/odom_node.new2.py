@@ -11,6 +11,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler
+from sensor_msgs.msg import Imu
 
 
 class ForkYawOdom(Node):
@@ -27,12 +28,10 @@ class ForkYawOdom(Node):
         super().__init__("fork_yaw_odom")
 
         # --- Paramètres ROS2 ---
-        self.declare_parameter("yaw_index",   0)
         self.declare_parameter("publish_tf",  True)
         self.declare_parameter("invert_yaw",  False)
         self.declare_parameter("yaw_offset",  0.0)   # offset en radians, réglable sans recompiler
 
-        self.yaw_index  = self.get_parameter("yaw_index").value
         self.publish_tf = self.get_parameter("publish_tf").value
         self.invert_yaw = self.get_parameter("invert_yaw").value
         self.yaw_offset = self.get_parameter("yaw_offset").value
@@ -52,7 +51,7 @@ class ForkYawOdom(Node):
 
         # --- Pub / Sub ---
         self.create_subscription(ForkSpeed,         "/raw_fork_data", self.on_speed,   10)
-        self.create_subscription(Float32MultiArray, "/stm32_sensors", self.on_sensors, 10)
+        self.create_subscription(Imu, "/raw_imu_data", self.on_imu, 10)
         self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10) #Pour savoir si on est en arrière
 
         self.odom_pub       = self.create_publisher(Odometry, "/odom", 10)
@@ -68,50 +67,29 @@ class ForkYawOdom(Node):
         self.publish_rate = 50.0  # Hz
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_odom)
 
-    # ------------------------------------------------------------------ #
-    #  Callback capteur IMU / encodeur angulaire                          #
-    # ------------------------------------------------------------------ #
-    def on_sensors(self, msg: Float32MultiArray):
-        now       = self.get_clock().now()
-        dt_sensor = (now - self.last_sensor_time).nanoseconds * 1e-9
+    def on_imu(self, msg: Imu):
+        now = self.get_clock().now()
+        
+        # Récupération directe d'Omega (calculée par le STM32, sans dérivation -> sans bruit)
+        raw_omega = msg.angular_velocity.z 
+        if abs(raw_omega) > self.MAX_OMEGA:
+            raw_omega = 0.0
+        self.omega = raw_omega 
 
-        # --- 1. Conversion du yaw brut ---
-        raw_val = float(msg.data[self.yaw_index])
+        # Conversion Quaternion -> Yaw (Lacet)
+        siny_cosp = 2 * (msg.orientation.w * msg.orientation.z)
+        cosy_cosp = 1 - 2 * (msg.orientation.z * msg.orientation.z)
+        new_yaw = math.atan2(siny_cosp, cosy_cosp)
 
-        # Capteur envoie [-2π, 0] → on normalise via atan2 + offset paramétrable
-        adjusted_yaw = raw_val + self.yaw_offset
+        # Application des offsets paramétrables
+        adjusted_yaw = new_yaw + self.yaw_offset
         if self.invert_yaw:
             adjusted_yaw = -adjusted_yaw
 
-        new_yaw = math.atan2(math.sin(adjusted_yaw), math.cos(adjusted_yaw))
-
-        # --- Log de debug ---
-
-
-        # --- 2. Calcul de omega (vitesse angulaire) ---
-        if self.yaw is not None and 0.0 < dt_sensor < self.MAX_DT:
-            delta_yaw = new_yaw - self.yaw
-
-            # Gérer le passage ±π
-            if delta_yaw >  math.pi: delta_yaw -= 2.0 * math.pi
-            if delta_yaw < -math.pi: delta_yaw += 2.0 * math.pi
-
-            raw_omega = delta_yaw / dt_sensor
-
-            # Clamp physique
-            if abs(raw_omega) > self.MAX_OMEGA:
-                raw_omega = 0.0
-                self.get_logger().warn(
-                    f"Omega aberrant ignoré ({raw_omega:.2f} rad/s)",
-                    throttle_duration_sec=2.0
-                )
-
-            # Filtre passe-bas exponentiel
-            self.omega = (self.OMEGA_ALPHA * raw_omega
-                          + (1.0 - self.OMEGA_ALPHA) * self.omega)
-
-        self.yaw              = new_yaw
+        # Normalisation finale
+        self.yaw = math.atan2(math.sin(adjusted_yaw), math.cos(adjusted_yaw))
         self.last_sensor_time = now
+
 
     def esc_state_callback(self, msg):
         self.esc_state = msg.data
