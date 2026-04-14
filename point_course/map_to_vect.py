@@ -44,17 +44,7 @@ def to_vect(points):
     return vects
 
 
-def reverse_vect(vects):
-    reversed_vects = []
-
-    for vect in vects:
-        x, y, theta = vect
-        reversed_vects.append([x, y, theta + np.pi])
-
-    return reversed_vects
-
-
-def print_course(vects, reversed_vects):
+def print_course(vects):
     if not vects:
         print("Aucun vecteur à afficher.")
         return
@@ -62,18 +52,13 @@ def print_course(vects, reversed_vects):
     print(f"    p0: {vects[0]}")
     print("\n")
 
-    for i in range(len(vects)):
+    for i in range(1, len(vects)):
         print(f"    use_p{i}: true")
 
     print("\n")
 
     for i in range(1, len(vects)):
         print(f"    p{i}: {vects[i]}")
-
-    print("\n")
-
-    for i in range(1, len(reversed_vects)):
-        print(f"    p{i}_reverse: {reversed_vects[i]}")
 
 
 def onclick(event, resolution, origin, height):
@@ -89,8 +74,8 @@ def onclick(event, resolution, origin, height):
     vects = to_vect(x_y_reals)
 
 
-yaml_path = "final.yaml"
-image_path = "final.pgm"
+yaml_path = "maps_course_2026/final.yaml"
+image_path = "maps_course_2026/final.pgm"
 
 image = open_image(image_path, False)
 resolution, origin = get_resolution_origin(yaml_path)
@@ -109,5 +94,4 @@ cid = fig.canvas.mpl_connect(
 plt.show()
 
 vects = to_vect(x_y_reals)
-reversed_vect = reverse_vect(vects)
-print_course(vects, reversed_vect)
+print_course(vects)
