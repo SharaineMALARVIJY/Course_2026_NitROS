@@ -2,7 +2,7 @@
 
 - ESC : Tamiya ESC TBLE-04S
 - batteries : T04S
-- moteur prop : Mabuchimotor RS540RH/SH
+- moteur prop : Mabuchimotor RS540SH Ref:BD109829
 - dynamixel : AX-12A
 - capteur IR : Sharp GP2Y0A41SK0F
 - accéléoromètre/gyromètre : Bosh BNO055
