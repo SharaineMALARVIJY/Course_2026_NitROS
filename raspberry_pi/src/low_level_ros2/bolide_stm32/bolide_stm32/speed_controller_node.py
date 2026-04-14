@@ -16,6 +16,7 @@ class SpeedControllerNode(Node):
 
         # debug
         self.declare_parameter('debug', True)
+        self.declare_parameter('info', True)
         self.declare_parameter('debug_freq', 2.0)  # Hz
 
         self.max_fwd = self.get_parameter('max_speed_forward').value
@@ -23,6 +24,7 @@ class SpeedControllerNode(Node):
 
         freq = self.get_parameter('frequency').value
         self.debug = self.get_parameter('debug').value
+        self.info = self.get_parameter('info').value
         self.debug_freq = self.get_parameter('debug_freq').value
         self.PID_enabled = self.get_parameter('PID_enabled').value
 
@@ -83,8 +85,7 @@ class SpeedControllerNode(Node):
         self.create_subscription(Float32, '/cmd_dir', self.cb_dir, 10)
         self.turn = 0.0
 
-
-        if self.debug:
+        if self.info:
             self.create_timer(1.0 / self.debug_freq, self.debug_loop)
 
         self.get_logger().info("Adaptive speed controller (m/s) started")
@@ -188,34 +189,38 @@ class SpeedControllerNode(Node):
     
     def debug_loop(self):
         display_speed = self.abs_speed_meas * self.motor_direction
-        
-        # --- Calcul des recommandations ---
-        rec_gain = self.gain
-        rec_k_turn = self.k_turn
-        
-        # 1. Gain recommandé (seulement si on bouge assez pour que ce soit fiable)
-        if self.abs_speed_meas > 0.1 and abs(self.target) > 0.1:
-            # On calcule quel gain aurait été parfait pour atteindre la cible
-            rec_gain = (abs(self.target) * self.gain) / self.abs_speed_meas
-            
-        # 2. K_turn recommandé (seulement si on tourne significativement)
-        if self.turn > 0.1 and self.abs_speed_meas > 0.1:
-            # On regarde de combien on est en dessous de la cible à cause du virage
-            ratio = abs(self.target) / self.abs_speed_meas
-            if ratio > 1.0:
-                # On manque de vitesse en virage -> on calcule le k_turn nécessaire
-                rec_k_turn = (ratio - 1.0) / (self.turn ** 2)
-            elif ratio < 1.0 - 0.01:
-                # On va déjà trop vite -> on suggère de baisser k_turn vers 0
-                rec_k_turn = 0.0
 
         self.get_logger().info(
-            f"\r\n[DEBUG cmd_speed_controler] Cible: {self.target:.2f} | Mesuré: {display_speed:.2f} | CMD: {self.cmd:.5f}"
-            f"\r\n[ACTUEL] Gain: {self.gain:.4f} | K_turn: {self.k_turn:.2f}                                                     "
-            f"\r\n[CONSEIL] Mets Gain = {rec_gain:.4f} | Mets K_turn = {rec_k_turn:.2f}                                          "
-            f"\r\nBatterie: {self.vbat:.2f}V | Intégrale: {self.integral:.3f} PID {self.PID_enabled}"
-            f"\r\n--------------------------------------------------------"
+            f"\r\n[DEBUG cmd_speed_controler] Cible: {self.target:.2f} | Mesuré: {display_speed:.2f} | Batterie: {self.vbat:.2f}V"
         )
+        
+        if self.debug:
+            # --- Calcul des recommandations ---
+            rec_gain = self.gain
+            rec_k_turn = self.k_turn
+            
+            # 1. Gain recommandé (seulement si on bouge assez pour que ce soit fiable)
+            if self.abs_speed_meas > 0.1 and abs(self.target) > 0.1:
+                # On calcule quel gain aurait été parfait pour atteindre la cible
+                rec_gain = (abs(self.target) * self.gain) / self.abs_speed_meas
+                
+            # 2. K_turn recommandé (seulement si on tourne significativement)
+            if self.turn > 0.1 and self.abs_speed_meas > 0.1:
+                # On regarde de combien on est en dessous de la cible à cause du virage
+                ratio = abs(self.target) / self.abs_speed_meas
+                if ratio > 1.0:
+                    # On manque de vitesse en virage -> on calcule le k_turn nécessaire
+                    rec_k_turn = (ratio - 1.0) / (self.turn ** 2)
+                elif ratio < 1.0 - 0.01:
+                    # On va déjà trop vite -> on suggère de baisser k_turn vers 0
+                    rec_k_turn = 0.0
+
+            self.get_logger().info(
+                f"\r\n[ACTUEL] Gain: {self.gain:.4f} | K_turn: {self.k_turn:.2f}                                                     "
+                f"\r\n[CONSEIL] Mets Gain = {rec_gain:.4f} | Mets K_turn = {rec_k_turn:.2f}                                          "
+                f"\r\nCMD: {self.cmd:.5f} | Intégrale: {self.integral:.3f} PID {self.PID_enabled}"
+                f"\r\n--------------------------------------------------------"
+            )
 
     # ---------------------- publish ----------------------
 

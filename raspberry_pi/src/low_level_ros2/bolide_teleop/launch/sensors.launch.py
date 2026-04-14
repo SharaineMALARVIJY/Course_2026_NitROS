@@ -45,7 +45,7 @@ def generate_launch_description():
     package='bolide_stm32',
     executable='speed_controller_node',
     parameters=[{
-        'debug': True,
+        'debug': False,
         'debug_freq': 2.0,
         'max_speed_forward': 3.0,
         'max_speed_reverse': 1.5

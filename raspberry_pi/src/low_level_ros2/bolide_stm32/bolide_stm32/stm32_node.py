@@ -1,6 +1,7 @@
 """stm32 node. It receives data of the sensors (IMU, infrared, fork) from the STM32 and send it the PWM for the propulsion motor."""
 
 # IMPORTS
+import threading
 import spidev
 import math
 
@@ -59,6 +60,7 @@ class STM32_Parser(Node):
 
         # Fork
         self.fork_data = ForkSpeed()  # Fork message type (see bolide_interfaces)
+        self.max_fork_speed = self.get_parameter('max_fork_speed').value
 
         # Battery
         self.vbat_msg = Float32()
@@ -84,14 +86,12 @@ class STM32_Parser(Node):
         self.range_msg_left.radiation_type = Range.INFRARED
         self.range_msg_left.min_range = self.ir_min_range
         self.range_msg_left.max_range = self.ir_max_range
-        self.range_msg.ir_rear_left.field_of_view = 0.09   # ~5,15°
 
         self.range_msg_right = Range()
         self.range_msg_right.header.frame_id = "ir_right_frame"
         self.range_msg_right.radiation_type = Range.INFRARED
         self.range_msg_right.min_range = self.ir_min_range
         self.range_msg_right.max_range = self.ir_max_range
-        self.range_msg_right.ir_rear_right.field_of_view = 0.09   # ~5,15°
 
         self.range_msg_sonar = Range()
         self.range_msg_sonar.header.frame_id = "sonar_frame"
@@ -177,12 +177,13 @@ class STM32_Parser(Node):
             yaw = ((data[2] << 8) | data[3]) * self.YAW_FACTOR  # rad - twist around the z axis (vertical) -
             ir_left_raw = (data[4] << 8) | data[5]  # mV - left infrared sensor -
             ir_right_raw = (data[6] << 8) | data[7]   # mV - right infrared sensor -
-            speed = 0.002*((data[8] << 8) | data[9])  # m/s speed from the fork - We have to add a factor 2, there is a 1 bit shift for some reason-
+            raw_speed = 0.002*((data[8] << 8) | data[9])  # m/s speed from the fork - We have to add a factor 2, there is a 1 bit shift for some reason-
             distance_US_raw = 0.01*((data[10] << 8) | data[11])  # m  - distance from the ultrasound sensor -
             acc_x_raw = 0.01*int.from_bytes([data[12], data[13]], byteorder='big', signed=True)  # ms^-2 - acceleration in the x axis -
             yaw_rate = int.from_bytes([data[14], data[15]], byteorder='big', signed=True) * self.YAW_RATE_FACTOR  # rads^-1 - rotation speed around the z-axis of the car -
 
             ## Fork Speed (abs)
+            speed = raw_speed if raw_speed < self.max_fork_speed else 0.    # fork can send aberrant values if it stops partially on a hole.
             self.fork_data.header.stamp = timestamp
             self.fork_data.speed = speed 
             self.speed_pub.publish(self.fork_data)
@@ -199,7 +200,7 @@ class STM32_Parser(Node):
             ## Ranges
             # IR Left
             ir_left_v = ir_left_raw / 1000.0  # conversion mV --> V
-            if ir_left_v > 0.02 : # Seuil de sécurité
+            if ir_left_v > 0.001 : # Seuil de sécurité
                 ir_left = (15.38/ir_left_v - 0.42)/100.0 # conversion V --> m (using component datasheet)
             else:
                 ir_left = ir_max_range
@@ -207,7 +208,7 @@ class STM32_Parser(Node):
 
             # IR Right
             ir_right_v = ir_right_raw / 1000.0  # conversion mV --> V
-            if ir_right_v > 0.02: # Seuil de sécurité
+            if ir_right_v > 0.001: # Seuil de sécurité
                 ir_right = (15.38/ir_right_v - 0.42)/100.0 # V -> m
             else:
                 ir_right = ir_max_range
@@ -241,7 +242,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = STM32_Parser()
     try:
-        rclpy.spin(node)    
+        rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
