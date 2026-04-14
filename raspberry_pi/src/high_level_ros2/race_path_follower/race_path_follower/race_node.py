@@ -74,7 +74,6 @@ def main() -> None:
     navigator = BasicNavigator(node_name="race_node")
     logger = navigator.get_logger()
 
-    navigator.declare_parameter("reverse", False)
     navigator.declare_parameter("laps", 1)
     navigator.declare_parameter("log_frequency", 5)
     navigator.declare_parameter("max_retries", 30)
@@ -91,12 +90,6 @@ def main() -> None:
     navigator.declare_parameter("p3", [0.0, 0.0, 0.0])
     navigator.declare_parameter("p4", [0.0, 0.0, 0.0])
 
-    navigator.declare_parameter("p1_reverse", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p2_reverse", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p3_reverse", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p4_reverse", [0.0, 0.0, 0.0])
-
-    reverse = navigator.get_parameter("reverse").value
     laps = int(navigator.get_parameter("laps").value)
     log_freq = int(navigator.get_parameter("log_frequency").value)
     max_retries = int(navigator.get_parameter("max_retries").value)
@@ -113,31 +106,17 @@ def main() -> None:
     p3 = navigator.get_parameter("p3").value
     p4 = navigator.get_parameter("p4").value
 
-    p1_reverse = navigator.get_parameter("p1_reverse").value
-    p2_reverse = navigator.get_parameter("p2_reverse").value
-    p3_reverse = navigator.get_parameter("p3_reverse").value
-    p4_reverse = navigator.get_parameter("p4_reverse").value
-
     if not validate_point(logger, "p0", p0):
         navigator.destroy_node()
         rclpy.shutdown()
         return
 
-    if reverse:
-        logger.info("Reverse mode enabled")
-        selected_points = {
-            "p1": p1_reverse,
-            "p2": p2_reverse,
-            "p3": p3_reverse,
-            "p4": p4_reverse,
-        }
-    else:
-        selected_points = {
-            "p1": p1,
-            "p2": p2,
-            "p3": p3,
-            "p4": p4,
-        }
+    selected_points = {
+        "p1": p1,
+        "p2": p2,
+        "p3": p3,
+        "p4": p4,
+    }
 
     for name, p in selected_points.items():
         if not validate_point(logger, name, p):
