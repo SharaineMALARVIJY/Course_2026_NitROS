@@ -13,36 +13,25 @@ from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler
 from sensor_msgs.msg import Imu
 
-
 class ForkYawOdom(Node):
-    """
-    Odométrie ROS2 SLAM-ready pour robot à fourche.
-    """
-
-    OMEGA_ALPHA = 0.15   # Lissage omega : 0=figé, 1=brut
-    MAX_DT      = 0.5    # (s) Saut temporel max avant de rejeter l'intégration
-    MAX_OMEGA   = 3.0    # (rad/s) Clamp physique
-    YAW_TIMEOUT = 0.5    # (s) Si pas de yaw depuis X s → on n'intègre plus
-
     def __init__(self):
         super().__init__("fork_yaw_odom")
 
         # --- Paramètres ROS2 ---
-        self.declare_parameter("publish_tf",  True)
-        self.declare_parameter("invert_yaw",  False)
-        self.declare_parameter("yaw_offset",  0.0)   # offset en radians, réglable sans recompiler
+        self.declare_parameter("debug", True)
+        self.declare_parameter("publish_tf", True)
+        self.declare_parameter("invert_yaw", False)
+        self.declare_parameter("yaw_offset", 0.0)
 
+        self.debug = self.get_parameter("debug").value
         self.publish_tf = self.get_parameter("publish_tf").value
         self.invert_yaw = self.get_parameter("invert_yaw").value
         self.yaw_offset = self.get_parameter("yaw_offset").value
 
         # --- État interne ---
-        self.x     = 0.0
-        self.y     = 0.0
-        self.v     = 0.0
-        self.omega = 0.0
-        self.esc_state = 0
+        self.x, self.y, self.v, self.omega = 0.0, 0.0, 0.0, 0.0
         self.yaw: Optional[float] = None
+        self.esc_state = 0
 
         # --- Timestamps ---
         now = self.get_clock().now()
@@ -50,46 +39,64 @@ class ForkYawOdom(Node):
         self.last_sensor_time = now
 
         # --- Pub / Sub ---
-        self.create_subscription(ForkSpeed,         "/raw_fork_data", self.on_speed,   10)
+        self.create_subscription(ForkSpeed, "/raw_fork_data", self.on_speed, 10)
         self.create_subscription(Imu, "/raw_imu_data", self.on_imu, 10)
-        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10) #Pour savoir si on est en arrière
+        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10)
 
-        self.odom_pub       = self.create_publisher(Odometry, "/odom", 10)
+        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        self.get_logger().info(
-            f"Odométrie SLAM-Ready lancée  "
-            f"[yaw_index={self.yaw_index} | publish_tf={self.publish_tf} | "
-            f"invert_yaw={self.invert_yaw} | yaw_offset={self.yaw_offset:.3f} rad]"
-        )
+        self.get_logger().info("Odométrie IMU corrigée lancée")
 
-        #Timer
-        self.publish_rate = 50.0  # Hz
-        self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_odom)
-
+        self.timer = self.create_timer(1.0 / 50.0, self.publish_odom)
+        
     def on_imu(self, msg: Imu):
         now = self.get_clock().now()
         
-        # Récupération directe d'Omega (calculée par le STM32, sans dérivation -> sans bruit)
-        raw_omega = msg.angular_velocity.z 
-        if abs(raw_omega) > self.MAX_OMEGA:
-            raw_omega = 0.0
-        self.omega = raw_omega 
+        # 1. Récupération du Yaw Rate (Z) envoyé par le STM32
+        yaw_rate_stm32 = msg.angular_velocity.z 
 
-        # Conversion Quaternion -> Yaw (Lacet)
+        # 2. Conversion Quaternion -> Yaw (Lacet)
         siny_cosp = 2 * (msg.orientation.w * msg.orientation.z)
         cosy_cosp = 1 - 2 * (msg.orientation.z * msg.orientation.z)
-        new_yaw = math.atan2(siny_cosp, cosy_cosp)
+        current_yaw = math.atan2(siny_cosp, cosy_cosp)
 
-        # Application des offsets paramétrables
-        adjusted_yaw = new_yaw + self.yaw_offset
+        # 3. Application des paramètres (Inversion / Offset)
+        adjusted_yaw = current_yaw + self.yaw_offset
         if self.invert_yaw:
             adjusted_yaw = -adjusted_yaw
+        
+        # Normalisation [-pi, pi]
+        new_yaw = math.atan2(math.sin(adjusted_yaw), math.cos(adjusted_yaw))
 
-        # Normalisation finale
-        self.yaw = math.atan2(math.sin(adjusted_yaw), math.cos(adjusted_yaw))
+        # 4. Exécution du Debug (Comparaison avant mise à jour de self.yaw)
+        if self.debug:
+            self.debug_IMU(new_yaw, yaw_rate_stm32, now)
+
+        # 5. Mise à jour de l'état interne
+        self.omega = yaw_rate_stm32 # On utilise la valeur STM32 pour l'odom
+        self.yaw = new_yaw
         self.last_sensor_time = now
 
+    def debug_IMU(self, new_yaw, yaw_rate_stm, now):
+        dt = (now - self.last_sensor_time).nanoseconds * 1e-9
+
+        if self.yaw is not None and dt > 0:
+            delta = new_yaw - self.yaw
+            
+            # Correction du passage de ligne de coupure pi / -pi
+            if delta > math.pi:
+                delta -= 2 * math.pi
+            elif delta < -math.pi:
+                delta += 2 * math.pi
+
+            omega_calculated = delta / dt
+
+            # Log de comparaison (toutes les 0.5 secondes pour lisibilité)
+            self.get_logger().info(
+                f"Comparaison Omega - STM32: {yaw_rate_stm:6.3f} | Calculé: {omega_calculated:6.3f} | Diff: {abs(yaw_rate_stm - omega_calculated):6.3f}",
+                throttle_duration_sec=0.5
+            )
 
     def esc_state_callback(self, msg):
         self.esc_state = msg.data

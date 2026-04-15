@@ -22,7 +22,9 @@ def generate_launch_description():
             {"angle_compensate": True},
             {"scan_mode": "Express"},
             {"angle_min_filter": -1.75},    # -100° (extrème gauche)
-            {"angle_max_filter": 1.75}      # +100° (extrème droite)
+            {"angle_max_filter": 1.75},      # +100° (extrème droite)
+            {"motor_speed": 750},
+
         ]
     )
     stm32_node = Node(
@@ -45,7 +47,7 @@ def generate_launch_description():
     package='bolide_stm32',
     executable='speed_controller_node',
     parameters=[{
-        'debug': False,
+        'debug': True,
         'debug_freq': 2.0,
         'max_speed_forward': 3.0,
         'max_speed_reverse': 1.5
@@ -67,8 +69,8 @@ def generate_launch_description():
         respawn=restart_on_error,
         parameters=[{"debug": False},
                     {'baudrate': 1000000},
-                    {'max_steering_angle': 21.0},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
-                    {'steering_offset_deg': -1.2}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
+                    {'max_steering_angle': 20.0},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
+                    {'steering_offset_deg': -3.5}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
     )
     odom_node = Node(
         package="bolide_stm32",
@@ -156,30 +158,6 @@ def generate_launch_description():
         ]
     )
 
-    teleop_keyboard = Node(
-        package="bolide_teleop",
-        executable="teleop_keyboard",
-        name="teleop_keyboard",
-        output="screen",
-        respawn=restart_on_error,
-        parameters=[
-            {'debug': False},
-            {'speed_increment': 0.01},
-            {'direction_increment': 0.2},
-            {'rate': 10}                        # Hz
-        ]
-    )
-
-
-    # Quand teleop_keyboard se termine → shutdown de tout le launch
-    shutdown_on_teleop_exit = RegisterEventHandler(
-        OnProcessExit(
-            target_action=teleop_keyboard,
-            on_exit=[EmitEvent(event=Shutdown())]
-        )
-    )
-
-
     return LaunchDescription(
         [
             odom_node,
@@ -194,7 +172,5 @@ def generate_launch_description():
             cmd_dir_node,
             speed_controller,
             cmd_twist_bridge_node,
-            #teleop_keyboard,
-            #shutdown_on_teleop_exit,
         ]
     )

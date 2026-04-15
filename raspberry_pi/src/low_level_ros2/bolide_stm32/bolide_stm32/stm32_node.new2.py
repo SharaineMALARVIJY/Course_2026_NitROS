@@ -19,8 +19,25 @@ class STM32_Parser(Node):
         super().__init__('stm32_node')
 
         # PARAMS
-        self.declare_parameter('debug', False)
+        self.declare_parameter('debug', True)
         self.debug = self.get_parameter('debug').value
+        self.declare_parameter('calibrate', True)
+        self.calibrate = self.get_parameter('calibrate').value
+
+        # --- Variables de calibration ---
+        # calc yaw_rate et acc_x offset
+        self.calib_done = False 
+        self.calib_gyro_data = []
+        self.calib_acc_data = []
+        self.nb_samples_circuit = 400 # 2 secondes à 200Hz
+        self.alert_shown = False # Pour le message d'accueil
+        # calc yaw_rate_factor
+        self.prev_yaw = None
+        self.prev_time = None
+
+        # offsets de calibration IMU
+        self.GYRO_OFFSET_FIXE = 0.002206
+        self.ACC_X_OFFSET_FIXE = 0.0 #0.043
 
         # Pré-calcul des facteurs
         self.VBAT_FACTOR = 8.0 * (3.3 / 4095.0) * (1560.0 / 560.0)
@@ -106,7 +123,6 @@ class STM32_Parser(Node):
         # boucle principale à 200 Hz
         self.timer = self.create_timer(1.0 / 200.0, self.receiveSensorData)
 
-
     def get_command(self, msg: Int16):
         """Subscriber Function to transform the message received\
             for the speed to work with the controller
@@ -167,7 +183,8 @@ class STM32_Parser(Node):
         # data = self.spi.xfer2([0x45]*20)  # SPI happens simultaneously, so we need to send to receive.
 
         # Constants
-        timestamp = self.get_clock().now().to_msg()
+        now = self.get_clock().now()
+        timestamp = now.to_msg()
         ir_max_range = self.ir_max_range
 
         if not self.crc32mpeg2(data):
@@ -178,7 +195,7 @@ class STM32_Parser(Node):
             speed = 0.002*((data[8] << 8) | data[9])  # m/s speed from the fork - We have to add a factor 2, there is a 1 bit shift for some reason-
             distance_US_raw = 0.01*((data[10] << 8) | data[11])  # m  - distance from the ultrasound sensor -
             acc_x_raw = 0.01*int.from_bytes([data[12], data[13]], byteorder='big', signed=True)  # ms^-2 - acceleration in the x axis -
-            yaw_rate = int.from_bytes([data[14], data[15]], byteorder='big', signed=True) * self.YAW_RATE_FACTOR  # rads^-1 - rotation speed around the z-axis of the car -
+            yaw_rate_raw = int.from_bytes([data[14], data[15]], byteorder='big', signed=True) * self.YAW_RATE_FACTOR  # rads^-1 - rotation speed around the z-axis of the car -
 
             ## Fork Speed (abs)
             self.fork_data.header.stamp = timestamp
@@ -186,7 +203,8 @@ class STM32_Parser(Node):
             self.speed_pub.publish(self.fork_data)
 
             ## IMU
-            acc_x = acc_x_raw + 0.043   # offset de calibration
+            yaw_rate = yaw_rate_raw - self.GYRO_OFFSET_FIXE
+            acc_x = acc_x_raw - self.ACC_X_OFFSET_FIXE
             self.imu_data.header.stamp = timestamp
             self.imu_data.orientation.z = math.sin(yaw * 0.5)
             self.imu_data.orientation.w = math.cos(yaw * 0.5)
@@ -229,14 +247,76 @@ class STM32_Parser(Node):
             self.vbat_pub.publish(self.vbat_msg)
 
             ## sensors data (debug)
-            self.sensor_data.data = [yaw, speed, float(ir_left), float(ir_right), distance_US_raw, acc_x, yaw_rate]
-            self.stm_pub.publish(self.sensor_data)
             if self.debug:
-                self.get_logger().info(f"[DEBUG] -- stm32 sensors value :\n {self.sensor_data}")
+                self.sensor_data.data = [yaw, speed, float(ir_left), float(ir_right), distance_US_raw, acc_x, yaw_rate_raw]
+                self.stm_pub.publish(self.sensor_data)
             
-        else:
-            if self.debug:
-                self.get_logger().info(f"Invalid CRC")
+            if self.calibrate:
+                self.check_imu_offsets(yaw_rate_raw, acc_x_raw)
+                self.calc_yaw_rate_factor(data, now, yaw)
+            
+        elif self.debug:
+            self.get_logger().info(f"Invalid CRC")
+
+    def calc_yaw_rate_factor(self, data, now, yaw):
+        raw = int.from_bytes([data[14], data[15]], byteorder='big', signed=True)
+
+        # 1. On ne calcule que si on a une valeur précédente
+        if self.prev_yaw is not None:
+            dt = (now - self.prev_time).nanoseconds * 1e-9
+            if dt > 0:
+                delta = yaw - self.prev_yaw
+                
+                # Gestion du modulo 2PI
+                if delta > math.pi: delta -= 2*math.pi
+                if delta < -math.pi: delta += 2*math.pi
+
+                omega_real = delta / dt
+
+                # 2. On n'affiche le facteur que si la rotation est significative
+                if abs(raw) > 100: 
+                    factor_est = omega_real / raw
+                    self.get_logger().info(f"YAW_RATE_FACTOR ESTIMÉ: {factor_est:.6f}")
+
+        # 3. IMPORTANT : On met à jour TOUJOURS les variables à la fin de la fonction
+        self.prev_yaw = yaw
+        self.prev_time = now
+
+    def check_imu_offsets(self, raw_yaw_rate, raw_acc_x):
+        """
+        Accumule les mesures au repos et affiche les offsets moyens (Gyro et Accel).
+        Affiche une alerte au début pour demander l'immobilité.
+        """
+        if self.calib_done:
+            return
+
+        # Message d'alerte au tout début de la phase
+        if not self.alert_shown:
+            self.get_logger().warn("\n" + "!"*50 + 
+                                   "\n⚠️  CALIBRATION : GARDEZ LA VOITURE IMMOBILE ! ⚠️" +
+                                   "\n" + "!"*50)
+            self.alert_shown = True
+
+        self.calib_gyro_data.append(raw_yaw_rate)
+        self.calib_acc_data.append(raw_acc_x)
+
+        # Barre de progression légère (optionnelle, toutes les 100 mesures)
+        if len(self.calib_gyro_data) % 100 == 0:
+            self.get_logger().info(f"Calibration en cours... {len(self.calib_gyro_data)}/{self.nb_samples_circuit}")
+
+        if len(self.calib_gyro_data) >= self.nb_samples_circuit:
+            gyro_offset = sum(self.calib_gyro_data) / len(self.calib_gyro_data)
+            acc_offset = sum(self.calib_acc_data) / len(self.calib_acc_data)
+            
+            self.get_logger().info(
+                "\n" + "="*55 + 
+                f"\n✅ CALIBRATION TERMINEE"
+                f"\n" + "-"*55 +
+                f"\n>>> OFFSET GYRO (Yaw Rate) : {gyro_offset:.6f}"
+                f"\n>>> OFFSET ACCEL (Acc X)    : {acc_offset:.6f}"
+                f"\n" + "="*55
+            )
+            self.calib_done = True
 
 def main(args=None):
     rclpy.init(args=args)

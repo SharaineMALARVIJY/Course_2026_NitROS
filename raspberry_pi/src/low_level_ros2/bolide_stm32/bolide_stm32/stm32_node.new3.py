@@ -18,6 +18,10 @@ class STM32_Parser(Node):
     def __init__(self):
         super().__init__('stm32_node')
 
+        # calc yaw_rate_factor
+        self.prev_yaw = None
+        self.prev_time = None
+
         # PARAMS
         self.declare_parameter('debug', False)
         self.debug = self.get_parameter('debug').value
@@ -103,9 +107,15 @@ class STM32_Parser(Node):
         # crc table
         self.crc_table = self._generate_crc_table()
 
+        # Subscriber
+        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10)
+        self.esc_state = 0
+
         # boucle principale à 200 Hz
         self.timer = self.create_timer(1.0 / 200.0, self.receiveSensorData)
 
+    def esc_state_callback(self, msg):
+        self.esc_state = msg.data
 
     def get_command(self, msg: Int16):
         """Subscriber Function to transform the message received\
@@ -167,7 +177,8 @@ class STM32_Parser(Node):
         # data = self.spi.xfer2([0x45]*20)  # SPI happens simultaneously, so we need to send to receive.
 
         # Constants
-        timestamp = self.get_clock().now().to_msg()
+        now = self.get_clock().now()
+        timestamp = now.to_msg()
         ir_max_range = self.ir_max_range
 
         if not self.crc32mpeg2(data):
@@ -175,15 +186,10 @@ class STM32_Parser(Node):
             yaw = ((data[2] << 8) | data[3]) * self.YAW_FACTOR  # rad - twist around the z axis (vertical) -
             ir_left_raw = (data[4] << 8) | data[5]  # mV - left infrared sensor -
             ir_right_raw = (data[6] << 8) | data[7]   # mV - right infrared sensor -
-            speed = 0.002*((data[8] << 8) | data[9])  # m/s speed from the fork - We have to add a factor 2, there is a 1 bit shift for some reason-
+            abs_speed = 0.002*((data[8] << 8) | data[9])  # m/s speed from the fork - We have to add a factor 2, there is a 1 bit shift for some reason-
             distance_US_raw = 0.01*((data[10] << 8) | data[11])  # m  - distance from the ultrasound sensor -
             acc_x_raw = 0.01*int.from_bytes([data[12], data[13]], byteorder='big', signed=True)  # ms^-2 - acceleration in the x axis -
             yaw_rate = int.from_bytes([data[14], data[15]], byteorder='big', signed=True) * self.YAW_RATE_FACTOR  # rads^-1 - rotation speed around the z-axis of the car -
-
-            ## Fork Speed (abs)
-            self.fork_data.header.stamp = timestamp
-            self.fork_data.speed = speed 
-            self.speed_pub.publish(self.fork_data)
 
             ## IMU
             acc_x = acc_x_raw + 0.043   # offset de calibration
@@ -193,6 +199,12 @@ class STM32_Parser(Node):
             self.imu_data.angular_velocity.z = yaw_rate
             self.imu_data.linear_acceleration.x = acc_x
             self.imu_pub.publish(self.imu_data)
+
+            ## Fork Speed (abs)
+            speed = self.compute_signed_speed(abs_speed, acc_x)
+            self.fork_data.header.stamp = timestamp
+            self.fork_data.speed = speed 
+            self.speed_pub.publish(self.fork_data)
 
             ## Ranges
             # IR Left
@@ -234,9 +246,55 @@ class STM32_Parser(Node):
             if self.debug:
                 self.get_logger().info(f"[DEBUG] -- stm32 sensors value :\n {self.sensor_data}")
             
+            ## temporary
+            self.calc_yaw_rate_factor(data, now, yaw)
+            
         else:
-            if self.debug:
-                self.get_logger().info(f"Invalid CRC")
+            self.get_logger().info(f"Invalid CRC")
+
+    def compute_signed_speed(self, v_abs, acc):
+        if self.esc_state in [1, 2]:
+            expected_sign = +1
+        elif self.esc_state in [-1, -2]:
+            expected_sign = -1
+        else:
+            return 0.0
+        
+        # seuil bruit IMU
+        ACC_THRESHOLD = 0.15
+
+        # Par défaut → FSM
+        sign = expected_sign
+        
+        # Si accélération significative
+        if abs(acc) > ACC_THRESHOLD:
+            # Si incohérent avec le FSM → on inverse
+            if acc * expected_sign < 0:
+                sign = -expected_sign
+
+        return sign * v_abs
+
+    def calc_yaw_rate_factor(self, data, now, yaw):
+        raw = int.from_bytes([data[14], data[15]], byteorder='big', signed=True)
+
+        if self.prev_yaw is not None:
+            dt = (now - self.prev_time).nanoseconds * 1e-9
+            if dt > 0:
+                delta = yaw - self.prev_yaw
+                
+                if delta > math.pi:
+                    delta -= 2*math.pi
+                if delta < -math.pi:
+                    delta += 2*math.pi
+
+                omega_real = delta / dt
+
+                if abs(raw) > 10:  # éviter division bruit
+                    factor_est = omega_real / raw
+                    self.get_logger().info(f"YAW_RATE_FACTOR EST: {factor_est:.6f}")
+
+        self.prev_yaw = yaw
+        self.prev_time = now
 
 def main(args=None):
     rclpy.init(args=args)

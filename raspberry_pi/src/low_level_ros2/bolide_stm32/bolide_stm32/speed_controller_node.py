@@ -34,29 +34,13 @@ class SpeedControllerNode(Node):
         self.min_speed_rev = 0.15
         self.alpha_vbat = 0.01
         self.alpha_speed_meas = 0.05
-        self.integral_max = 0.3 #0.1
+        self.integral_max = 0.4 #0.3
         self.KP_rev = 0.1              # facteur de correction P
         self.KI_rev = 0.2
-        self.KP_fw = 0.1 #0.01   # 0.05
-        self.KI_fw = 0.2 #0.05   # 0.1
-        self.gain_fwd = 0.05 # 0.15
-        self.offset_fwd = 0.0
-        self.gain_rev = 0.2  # 0.3
-        self.offset_rev = 0.0
-
-        # # --- Cas Marche Avant (FWD) ---
-        # self.gain_fwd, self.offset_fwd = self.calculate_motor_model(
-        #     v1=1.0, g1=0.2,   # Point 1 fwd
-        #     v2=2.5, g2=0.18,  # Point 2 fwd
-        #     v_max=self.max_fwd
-        # )
-
-        # # --- Cas Marche Arrière (REV) ---
-        # self.gain_rev, self.offset_rev = self.calculate_motor_model(
-        #     v1=0.4, g1=0.15,  # Point 1 rev
-        #     v2=0.7, g2=0.12,  # Point 2 rev
-        #     v_max=self.max_rev
-        # )
+        self.KP_fw = 0.1    #0.1
+        self.KI_fw = 0.2 #0.2
+        self.gain_fwd = 0.05 #0.05
+        self.gain_rev = 0.2
 
         # --- état ---
         self.DT = 1.0 / freq        # 50 Hz -> 0.02
@@ -128,7 +112,6 @@ class SpeedControllerNode(Node):
             sign = 1.0
             self.max_speed = self.max_fwd
             self.gain = self.gain_fwd
-            self.offset = self.offset_fwd
             self.min_speed = self.min_speed_fwd
             self.KI = self.KI_fw
             self.KP = self.KP_fw
@@ -138,7 +121,6 @@ class SpeedControllerNode(Node):
             sign = -1.0
             self.max_speed = self.max_rev
             self.gain = self.gain_rev
-            self.offset = self.offset_rev
             self.min_speed = self.min_speed_rev
             self.KI = self.KI_rev
             self.KP = self.KP_rev
@@ -155,13 +137,11 @@ class SpeedControllerNode(Node):
         # --- FEEDFORWARD AVEC OFFSET ---
         if abs(v_target) > 0.01:
             # (V / Vmax) * Gain_dynamique + Offset
-            cmd_ff = (abs(v_target) / self.max_speed) * self.gain + self.offset
+            cmd_ff = (abs(v_target) / self.max_speed) * self.gain
             
             # Compensation batterie
             cmd_ff *= (self.vnom / self.vbat)
-            
-            # Compensation virage
-            #cmd_ff *= (1.0 + self.k_turn * (self.turn ** 2))
+
         else:
             cmd_ff = 0.0
 
@@ -197,28 +177,16 @@ class SpeedControllerNode(Node):
         if self.debug:
             # --- Calcul des recommandations ---
             rec_gain = self.gain
-            rec_k_turn = self.k_turn
             
             # 1. Gain recommandé (seulement si on bouge assez pour que ce soit fiable)
             if self.abs_speed_meas > 0.1 and abs(self.target) > 0.1:
                 # On calcule quel gain aurait été parfait pour atteindre la cible
                 rec_gain = (abs(self.target) * self.gain) / self.abs_speed_meas
-                
-            # 2. K_turn recommandé (seulement si on tourne significativement)
-            if self.turn > 0.1 and self.abs_speed_meas > 0.1:
-                # On regarde de combien on est en dessous de la cible à cause du virage
-                ratio = abs(self.target) / self.abs_speed_meas
-                if ratio > 1.0:
-                    # On manque de vitesse en virage -> on calcule le k_turn nécessaire
-                    rec_k_turn = (ratio - 1.0) / (self.turn ** 2)
-                elif ratio < 1.0 - 0.01:
-                    # On va déjà trop vite -> on suggère de baisser k_turn vers 0
-                    rec_k_turn = 0.0
 
             self.get_logger().info(
                 f"\r\n[ACTUEL] Gain: {self.gain:.4f} | K_turn: {self.k_turn:.2f}                                                     "
-                f"\r\n[CONSEIL] Mets Gain = {rec_gain:.4f} | Mets K_turn = {rec_k_turn:.2f}                                          "
-                f"\r\nCMD: {self.cmd:.5f} | Intégrale: {self.integral:.3f} PID {self.PID_enabled}"
+                f"\r\n[CONSEIL] Mets Gain = {rec_gain:.4f} | CMD: {self.cmd:.5f}                                         "
+                f"\r\nIntégrale: {self.integral:.3f} PID {self.PID_enabled}"
                 f"\r\n--------------------------------------------------------"
             )
 
@@ -228,32 +196,6 @@ class SpeedControllerNode(Node):
         msg = Float32()
         msg.data = float(value)
         self.pub.publish(msg)
-
-
-    def calculate_motor_model(self, v1, g1, v2, g2, v_max):
-        """
-        Calcule l'Offset et le Gain pur à partir de deux points expérimentaux.
-        v1, v2 : Vitesses cibles (m/s)
-        g1, g2 : Gains relevés (ceux de ton ancien paramètre ROS)
-        v_max  : La vitesse max définie dans ton paramètre (ex: 1.5 pour rev)
-        """
-        # 1. Conversion des Gains ROS en commandes PWM réelles (0.0 à 1.0)
-        u1 = (v1 / v_max) * g1
-        u2 = (v2 / v_max) * g2
-
-        # 2. Calcul de la pente (Gain dynamique pur)
-        # Formule : a = (y2 - y1) / (x2 - x1)
-        gain_pure = (u2 - u1) / (v2 - v1)
-
-        # 3. Calcul de l'ordonnée à l'origine (Offset de friction)
-        # Formule : b = y1 - a * x1
-        offset = u1 - (gain_pure * v1)
-
-        # 4. Conversion du gain_pure en "Gain_norm" pour rester indépendant de max_speed
-        # gain_ros = gain_pure * v_max
-        gain_norm = gain_pure * v_max
-
-        return gain_norm, offset
 
 
 def main(args=None):
