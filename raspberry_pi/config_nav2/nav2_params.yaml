@@ -77,12 +77,12 @@ controller_server:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
       # Vitesses limites
-      desired_linear_vel: 1.2          # vitesse de croisière (m/s)
+      desired_linear_vel: 1.0          # vitesse de croisière (m/s)
       max_linear_accel: 2.5            # accélération max (m/s²)
       max_linear_decel: 2.5            # décélération max (m/s²)
 
       # Lookahead
-      lookahead_dist: 0.4              # distance lookahead fixe (m)
+      lookahead_dist: 0.5              # distance lookahead fixe (m)
       min_lookahead_dist: 0.1          # lookahead minimum (m)
       max_lookahead_dist: 1.5          # lookahead maximum (m)
       lookahead_time: 1.5              # temps lookahead adaptatif (s)
@@ -117,15 +117,15 @@ controller_server:
       allow_reversing: true            # passer à true si marche arrière supportée
 
       use_dynamic_window : true
-      # allow_obstacle_checking_beyond_goal: true
+      allow_obstacle_checking_beyond_goal: true
 
 
 
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 14.0
-      publish_frequency: 7.0
+      update_frequency: 16.0
+      publish_frequency: 8.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
@@ -372,7 +372,7 @@ map_saver:
 
 docking_server:
   ros__parameters:
-    controller_frequency: 50.0
+    controller_frequency: 0.1
     dock_plugins: ["dummy_dock"]
     dummy_dock:
       plugin: "opennav_docking::SimpleChargingDock"
