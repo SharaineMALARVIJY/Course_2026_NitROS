@@ -1,198 +1,129 @@
 import math
 import rclpy
 from rclpy.node import Node
-from typing import Optional
-
 from bolide_interfaces.msg import ForkSpeed
-from std_msgs.msg import Float32MultiArray
-from std_msgs.msg import Float32
+from sensor_msgs.msg import Imu
 from std_msgs.msg import Int16
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Quaternion
 from tf2_ros import TransformBroadcaster
-from tf_transformations import quaternion_from_euler
-
+from tf_transformations import euler_from_quaternion
 
 class ForkYawOdom(Node):
-    """
-    Odométrie ROS2 SLAM-ready pour robot à fourche.
-    """
-
-    OMEGA_ALPHA = 0.15   # Lissage omega : 0=figé, 1=brut
-    MAX_DT      = 0.5    # (s) Saut temporel max avant de rejeter l'intégration
-    MAX_OMEGA   = 3.0    # (rad/s) Clamp physique
-    YAW_TIMEOUT = 0.5    # (s) Si pas de yaw depuis X s → on n'intègre plus
+    MAX_DT = 0.2        
+    YAW_TIMEOUT = 0.5 
 
     def __init__(self):
         super().__init__("fork_yaw_odom")
 
-        # --- Paramètres ROS2 ---
-        self.declare_parameter("yaw_index",   0)
-        self.declare_parameter("publish_tf",  True)
-        self.declare_parameter("invert_yaw",  False)
-        self.declare_parameter("yaw_offset",  0.0)   # offset en radians, réglable sans recompiler
-
-        self.yaw_index  = self.get_parameter("yaw_index").value
+        self.declare_parameter("publish_tf", True)
         self.publish_tf = self.get_parameter("publish_tf").value
-        self.invert_yaw = self.get_parameter("invert_yaw").value
-        self.yaw_offset = self.get_parameter("yaw_offset").value
 
         # --- État interne ---
         self.x     = 0.0
         self.y     = 0.0
-        self.v     = 0.0
-        self.omega = 0.0
+        self.v     = 0.0      # Vitesse linéaire (lissée par stm32_node)
+        self.omega = 0.0      # Vitesse angulaire (calculée/lissée par stm32_node)
+        self.yaw   = 0.0      # Orientation actuelle
+        self.last_yaw = 0.0 # Pour l'intégration trapézoïdale
+        self.current_q = Quaternion() # Stockage direct du quaternion IMU
         self.esc_state = 0
-        self.yaw: Optional[float] = None
+        self.first_yaw_received = False
 
         # --- Timestamps ---
-        now = self.get_clock().now()
-        self.last_update_time = now
-        self.last_sensor_time = now
+        self.last_update_time = self.get_clock().now()
+        self.last_imu_time    = self.get_clock().now()
 
-        # --- Pub / Sub ---
-        self.create_subscription(ForkSpeed,         "/raw_fork_data", self.on_speed,   10)
-        self.create_subscription(Float32MultiArray, "/stm32_sensors", self.on_sensors, 10)
-        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10) #Pour savoir si on est en arrière
-
-        self.odom_pub       = self.create_publisher(Odometry, "/odom", 10)
-        self.tf_broadcaster = TransformBroadcaster(self)
-
-        self.get_logger().info(
-            f"Odométrie SLAM-Ready lancée  "
-            f"[yaw_index={self.yaw_index} | publish_tf={self.publish_tf} | "
-            f"invert_yaw={self.invert_yaw} | yaw_offset={self.yaw_offset:.3f} rad]"
-        )
-
-        #Timer
-        self.publish_rate = 50.0  # Hz
-        self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_odom)
-
-    # ------------------------------------------------------------------ #
-    #  Callback capteur IMU / encodeur angulaire                          #
-    # ------------------------------------------------------------------ #
-    def on_sensors(self, msg: Float32MultiArray):
-        now       = self.get_clock().now()
-        dt_sensor = (now - self.last_sensor_time).nanoseconds * 1e-9
-
-        # --- 1. Conversion du yaw brut ---
-        raw_val = float(msg.data[self.yaw_index])
-
-        # Capteur envoie [-2π, 0] → on normalise via atan2 + offset paramétrable
-        adjusted_yaw = raw_val + self.yaw_offset
-        if self.invert_yaw:
-            adjusted_yaw = -adjusted_yaw
-
-        new_yaw = math.atan2(math.sin(adjusted_yaw), math.cos(adjusted_yaw))
-
-        # --- Log de debug ---
-
-
-        # --- 2. Calcul de omega (vitesse angulaire) ---
-        if self.yaw is not None and 0.0 < dt_sensor < self.MAX_DT:
-            delta_yaw = new_yaw - self.yaw
-
-            # Gérer le passage ±π
-            if delta_yaw >  math.pi: delta_yaw -= 2.0 * math.pi
-            if delta_yaw < -math.pi: delta_yaw += 2.0 * math.pi
-
-            raw_omega = delta_yaw / dt_sensor
-
-            # Clamp physique
-            if abs(raw_omega) > self.MAX_OMEGA:
-                raw_omega = 0.0
-                self.get_logger().warn(
-                    f"Omega aberrant ignoré ({raw_omega:.2f} rad/s)",
-                    throttle_duration_sec=2.0
-                )
-
-            # Filtre passe-bas exponentiel
-            self.omega = (self.OMEGA_ALPHA * raw_omega
-                          + (1.0 - self.OMEGA_ALPHA) * self.omega)
-
-        self.yaw              = new_yaw
-        self.last_sensor_time = now
-
-    def esc_state_callback(self, msg):
-        self.esc_state = msg.data
-
-    def on_speed(self, msg: ForkSpeed):
-        if self.esc_state < 0:
-            self.v = -float(msg.speed)
-        else:
-            self.v = float(msg.speed)
-
-    def publish_odom(self):
-        now = self.get_clock().now()
-        dt = (now - self.last_update_time).nanoseconds * 1e-9
-        self.last_update_time = now
-
-        if self.yaw is None:
-            return
-
-        yaw_age = (now - self.last_sensor_time).nanoseconds * 1e-9
-        if yaw_age > self.YAW_TIMEOUT:
-            return
-
-        if dt <= 0.0 or dt > self.MAX_DT:
-            return
-
-        self.x += self.v * math.cos(self.yaw) * dt
-        self.y += self.v * math.sin(self.yaw) * dt
-
-        q = quaternion_from_euler(0.0, 0.0, self.yaw)
-
-        odom = Odometry()
-        odom.header.stamp = now.to_msg()
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_footprint"
-
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
-        odom.pose.pose.position.z = 0.0
-        odom.pose.pose.orientation.x = q[0]
-        odom.pose.pose.orientation.y = q[1]
-        odom.pose.pose.orientation.z = q[2]
-        odom.pose.pose.orientation.w = q[3]
-
-        odom.twist.twist.linear.x = self.v
-        odom.twist.twist.angular.z = self.omega
-
-        # Covariances Pose
+        # --- Messages pré-remplis ---
+        self.odom_msg = Odometry()
+        self.odom_msg.header.frame_id = "odom"
+        self.odom_msg.child_frame_id = "base_footprint"
+        
+        # Covariances fixes
+        # --- Covariances Pose (Sécurisées pour Nav2) ---
         p_cov = [0.0] * 36
-        p_cov[0]  = 0.3
-        p_cov[7]  = 0.3
-        p_cov[14] = 1e6
-        p_cov[21] = 1e6
-        p_cov[28] = 1e6
-        p_cov[35] = 0.05
-        odom.pose.covariance = p_cov
+        p_cov[0]  = 0.3  # Certitude X
+        p_cov[7]  = 0.3  # Certitude Y
+        p_cov[14] = 1e6  # Z (Invalide)
+        p_cov[21] = 1e6  # Roll (Invalide)
+        p_cov[28] = 1e6  # Pitch (Invalide)
+        p_cov[35] = 0.02 # Yaw (Très précis grâce au BNO055) (old 0.05)
+        self.odom_msg.pose.covariance = p_cov
 
-        # Covariances Twist
+        # --- Covariances Twist ---
         t_cov = [0.0] * 36
         t_cov[0]  = 0.1
         t_cov[7]  = 0.1
         t_cov[14] = 1e6
         t_cov[21] = 1e6
         t_cov[28] = 1e6
-        t_cov[35] = 0.05
-        odom.twist.covariance = t_cov
+        t_cov[35] = 0.05 # old 0.2
+        self.odom_msg.twist.covariance = t_cov
 
-        self.odom_pub.publish(odom)
+        # --- Pub / Sub ---
+        self.create_subscription(ForkSpeed, "/raw_fork_data", self.on_speed, 10)
+        self.create_subscription(Imu, "/imu", self.on_imu, 10)
+        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10)
+
+        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        self.timer = self.create_timer(0.02, self.publish_odom)
+        self.get_logger().info("Odométrie v4 lancée")
+
+    def esc_state_callback(self, msg):
+        self.esc_state = msg.data
+
+    def on_speed(self, msg: ForkSpeed):
+        self.v = float(msg.speed) if self.esc_state >= 0 else -float(msg.speed)
+
+    def on_imu(self, msg: Imu):
+        self.current_q = msg.orientation
+        _, _, yaw = euler_from_quaternion([self.current_q.x, self.current_q.y, self.current_q.z, self.current_q.w])
+        
+        if not self.first_yaw_received:
+            self.last_yaw = yaw
+            self.first_yaw_received = True
+            
+        self.yaw, self.omega = yaw, msg.angular_velocity.z
+        self.last_imu_time = rclpy.time.Time.from_msg(msg.header.stamp)
+
+    def publish_odom(self):
+        if not self.first_yaw_received: return
+
+        now = self.get_clock().now()
+        dt = (now - self.last_update_time).nanoseconds * 1e-9
+        self.last_update_time = now
+
+        # Sécurité timing
+        imu_age = (now - self.last_imu_time).nanoseconds * 1e-9
+        if imu_age > self.YAW_TIMEOUT or dt <= 0.0 or dt > self.MAX_DT: return
+
+        # --- Intégration Trapézoïdale ---
+        # On utilise la moyenne de l'angle sur le pas de temps pour plus de précision
+        avg_yaw = self.last_yaw + (self.yaw - self.last_yaw) * 0.5
+        self.x += self.v * math.cos(avg_yaw) * dt
+        self.y += self.v * math.sin(avg_yaw) * dt
+        self.last_yaw = self.yaw
+
+        # --- Remplissage du message ---
+        self.odom_msg.header.stamp = now.to_msg()
+        self.odom_msg.pose.pose.position.x = self.x
+        self.odom_msg.pose.pose.position.y = self.y
+        self.odom_msg.pose.pose.orientation = self.current_q 
+        self.odom_msg.twist.twist.linear.x = self.v
+        self.odom_msg.twist.twist.angular.z = self.omega
+
+        self.odom_pub.publish(self.odom_msg)
 
         if self.publish_tf:
             t = TransformStamped()
-            t.header = odom.header
-            t.child_frame_id = odom.child_frame_id
+            t.header = self.odom_msg.header
+            t.child_frame_id = self.odom_msg.child_frame_id
             t.transform.translation.x = self.x
             t.transform.translation.y = self.y
-            t.transform.translation.z = 0.0
-            t.transform.rotation.x = q[0]
-            t.transform.rotation.y = q[1]
-            t.transform.rotation.z = q[2]
-            t.transform.rotation.w = q[3]
+            t.transform.rotation = self.current_q
             self.tf_broadcaster.sendTransform(t)
-
 
 def main(args=None):
     rclpy.init(args=args)

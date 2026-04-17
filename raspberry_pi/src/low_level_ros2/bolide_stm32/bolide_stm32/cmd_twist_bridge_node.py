@@ -29,8 +29,8 @@ class CmdTwistNodeBridge(Node):
         self.pub_steer = self.create_publisher(Float32, '/cmd_dir', 10)
 
 
-        self.MAX_DIR = math.radians(17.0)  # deg -> rad
-        self.L = 0.258 # m
+        self.MAX_DIR = math.radians(22.8)  # deg -> rad
+        self.L = 0.257 # m
 
     def callback(self, msg):
         propulsion = clamp(msg.linear.x, -1.5, 3.0)

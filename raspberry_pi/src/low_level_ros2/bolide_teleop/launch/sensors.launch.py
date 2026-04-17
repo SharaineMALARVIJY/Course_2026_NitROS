@@ -33,7 +33,7 @@ def generate_launch_description():
         name="stm32_node",
         output="screen",
         respawn=restart_on_error,
-        parameters=[{"debug": False}],
+        parameters=[{"debug": True}],
     )
     cmd_vel_node = Node(
         package="bolide_stm32",
@@ -47,10 +47,20 @@ def generate_launch_description():
     package='bolide_stm32',
     executable='speed_controller_node',
     parameters=[{
-        'debug': True,
-        'debug_freq': 2.0,
         'max_speed_forward': 3.0,
-        'max_speed_reverse': 1.5
+        'max_speed_reverse': 1.5,
+        'frequency': 50,
+        'PID_enabled': True,
+        'kp_fwd': 0.08,
+        'ki_fwd': 0.8,
+        'gain_fwd': 0.023,
+        'kp_rev': 0.1,
+        'ki_rev': 0.5,
+        'gain_rev':  0.02,
+        'integral_max': 0.3,
+        'info': True,
+        'calibrate': False,
+        'calibrate_freq': 2.0
     }]
     )
     cmd_twist_bridge_node = Node(
@@ -69,7 +79,7 @@ def generate_launch_description():
         respawn=restart_on_error,
         parameters=[{"debug": False},
                     {'baudrate': 1000000},
-                    {'max_steering_angle': 20.0},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
+                    {'max_steering_angle': 22.8},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
                     {'steering_offset_deg': -3.5}],     # offset (sens marche avant) : gauche >0, droit <0 (en°)
     )
     odom_node = Node(
@@ -77,6 +87,8 @@ def generate_launch_description():
         executable="odom_node",
         name="odom_node",
         output="screen",
+        parameters=[{"publish_tf": True}],
+        
     )
     tf_base_to_link = Node(
     package="tf2_ros",

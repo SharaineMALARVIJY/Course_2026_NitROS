@@ -3,200 +3,134 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, Int16
 from bolide_interfaces.msg import ForkSpeed
 
-
 class SpeedControllerNode(Node):
     def __init__(self):
         super().__init__('speed_controller_node')
 
-        # --- paramètres ---
-        self.declare_parameter('max_speed_forward', 3.0)
-        self.declare_parameter('max_speed_reverse', 1.5)
-        self.declare_parameter('frequency', 50)
-        self.declare_parameter('PID_enabled', True)
+        # --- Déclaration des paramètres ROS ---
+        self.declare_parameters(
+            namespace='',
+            parameters=[
+                ('max_speed_forward', 3.0),
+                ('max_speed_reverse', 1.5),
+                ('frequency', 50),
+                ('PID_enabled', True),
+                ('kp_fwd', 0.08),
+                ('ki_fwd', 0.8),
+                ('gain_fwd', 0.023),
+                ('kp_rev', 0.1),
+                ('ki_rev', 0.5),
+                ('gain_rev', 0.02),
+                ('integral_max', 0.3),
+                ('info', True),       # Pour l'affichage minimal de statut
+                ('calibrate', True),      # Pour l'affichage de calibration complet
+                ('calibrate_freq', 2.0)
+            ]
+        )
 
-        # debug
-        self.declare_parameter('debug', True)
-        self.declare_parameter('info', True)
-        self.declare_parameter('debug_freq', 2.0)  # Hz
-
-        self.max_fwd = self.get_parameter('max_speed_forward').value
-        self.max_rev = self.get_parameter('max_speed_reverse').value
-
+        # --- Cache des paramètres ---
+        self.pid_enabled_global = self.get_parameter('PID_enabled').value
+        self.calibrate_enabled = self.get_parameter('calibrate').value
+        self.info_enabled = self.get_parameter('info').value
+        self.integral_max = self.get_parameter('integral_max').value
+        
         freq = self.get_parameter('frequency').value
-        self.debug = self.get_parameter('debug').value
-        self.info = self.get_parameter('info').value
-        self.debug_freq = self.get_parameter('debug_freq').value
-        self.PID_enabled = self.get_parameter('PID_enabled').value
-
-        self.k_turn = 0.0
+        self.DT = 1.0 / freq
         self.vnom = 8.4
-        self.min_speed_fwd = 0.3
-        self.min_speed_rev = 0.15
-        self.alpha_vbat = 0.01
-        self.alpha_speed_meas = 0.05
-        self.integral_max = 0.4 #0.3
-        self.KP_rev = 0.1              # facteur de correction P
-        self.KI_rev = 0.2
-        self.KP_fw = 0.1    #0.1
-        self.KI_fw = 0.2 #0.2
-        self.gain_fwd = 0.05 #0.05
-        self.gain_rev = 0.2
 
-        # --- état ---
-        self.DT = 1.0 / freq        # 50 Hz -> 0.02
-        self.target = 0.0           # m/s
-        self.abs_speed_meas = 0.0   # m/s > 0
-        self.speed_meas = 0.0       # m/s
+        # Profils
+        self.cfg_fwd = {
+            'sign': 1.0, 'max': self.get_parameter('max_speed_forward').value,
+            'gain': self.get_parameter('gain_fwd').value, 'min': 0.3,
+            'kp': self.get_parameter('kp_fwd').value, 'ki': self.get_parameter('ki_fwd').value,
+            'lim': (1.1e-4, 1.0)
+        }
+        self.cfg_rev = {
+            'sign': -1.0, 'max': self.get_parameter('max_speed_reverse').value,
+            'gain': self.get_parameter('gain_rev').value, 'min': 0.15,
+            'kp': self.get_parameter('kp_rev').value, 'ki': self.get_parameter('ki_rev').value,
+            'lim': (-1.0, -1.1e-4)
+        }
+
+        # --- État ---
+        self.target = 0.0
+        self.abs_speed_meas = 0.0
         self.vbat = self.vnom
-
-        self.cmd = 0.0
         self.integral = 0.0
-        self.gain = self.gain_fwd
-        self.KI = 0.0
         self.motor_direction = 0.0
+        self.pid_active_esc = True 
+        self.cmd = 0.0
+        self.current_gain = 0.0
 
-        # --- pub/sub ---
+        # --- Pub/Sub ---
         self.pub = self.create_publisher(Float32, '/cmd_vel', 10)
-
         self.create_subscription(Float32, '/cmd_speed_target', self.cb_target, 10)
         self.create_subscription(Float32, '/battery_voltage', self.cb_battery, 10)
         self.create_subscription(ForkSpeed, '/raw_fork_data', self.cb_speed, 10)
         self.create_subscription(Int16, '/esc_state', self.cb_esc_state, 10)
 
-        self.create_timer(self.DT, self.loop)  # 50 Hz
+        # --- Timers ---
+        self.create_timer(self.DT, self.loop)
+        if self.info_enabled or self.calibrate_enabled:
+            self.create_timer(1.0 / self.get_parameter('calibrate_freq').value, self.calibrate_loop)
 
-        # virage
-        self.create_subscription(Float32, '/cmd_dir', self.cb_dir, 10)
-        self.turn = 0.0
-
-        if self.info:
-            self.create_timer(1.0 / self.debug_freq, self.debug_loop)
-
-        self.get_logger().info("Adaptive speed controller (m/s) started")
-
-    # ---------------------- callbacks ----------------------
-
-    def cb_target(self, msg):
-        self.target = msg.data  # en m/s
-
-    def cb_battery(self, msg):
-        raw_vbat = min(8.5, max(5.0, msg.data))
-        self.vbat = self.alpha_vbat * raw_vbat + (1.0 - self.alpha_vbat) * self.vbat
-
-    def cb_speed(self, msg):
-        speed_meas_raw = msg.speed  # toujours positive
-        self.abs_speed_meas = self.alpha_speed_meas * speed_meas_raw + (1.0 - self.alpha_speed_meas) * self.abs_speed_meas
-
-    def cb_dir(self, msg):
-        self.turn = abs(msg.data)
-    
+    def cb_target(self, msg): self.target = msg.data
+    def cb_battery(self, msg): self.vbat = msg.data
+    def cb_speed(self, msg): self.abs_speed_meas = msg.speed
     def cb_esc_state(self, msg):
-        esc_state = msg.data
-        self.motor_direction = 1.0 if esc_state >= 0 else -1.0
-        self.PID_enabled = abs(esc_state) < 2
-        if not self.PID_enabled:
-            self.integral = 0.0
-
-    # ---------------------- loop principale ----------------------
+        state = msg.data
+        self.motor_direction = 1.0 if state >= 0 else -1.0
+        self.pid_active_esc = abs(state) < 2
+        if not self.pid_active_esc: self.integral = 0.0
 
     def loop(self):
         v_target = self.target
-
-        # --- voltage ---
         if self.vbat < 6.2:
-            self.get_logger().info(f" Motor Battery under 6.2V. Please change your battery. ({self.vbat}V)\n\r")
+            self.get_logger().warn(f"BAT LOW: {self.vbat:.1f}V", throttle_duration_sec=5)
             v_target = 0.0
 
-        # --- PARAMÈTRES ---
-        if v_target > 0 :
-            sign = 1.0
-            self.max_speed = self.max_fwd
-            self.gain = self.gain_fwd
-            self.min_speed = self.min_speed_fwd
-            self.KI = self.KI_fw
-            self.KP = self.KP_fw
-            cmd_min = 1.1e-4
-            cmd_max = 1.0
-        else :
-            sign = -1.0
-            self.max_speed = self.max_rev
-            self.gain = self.gain_rev
-            self.min_speed = self.min_speed_rev
-            self.KI = self.KI_rev
-            self.KP = self.KP_rev
-            cmd_max = -1.1e-4
-            cmd_min = -1.0
+        c = self.cfg_fwd if v_target >= 0 else self.cfg_rev
+        self.current_gain = c['gain']
+        abs_v_target = abs(v_target)
 
-        # --- DEAD ZONE ---
-        if abs(v_target) < self.min_speed: 
+        if abs_v_target < c['min']:
             self.integral = 0.0
-            self.cmd = 0.0
             self.publish(0.0)
             return
 
-        # --- FEEDFORWARD AVEC OFFSET ---
-        if abs(v_target) > 0.01:
-            # (V / Vmax) * Gain_dynamique + Offset
-            cmd_ff = (abs(v_target) / self.max_speed) * self.gain
-            
-            # Compensation batterie
-            cmd_ff *= (self.vnom / self.vbat)
+        cmd_ff = (abs_v_target / c['max']) * c['gain'] * (self.vnom / self.vbat)
 
-        else:
-            cmd_ff = 0.0
-
-        # --- PI (CORRECTEUR) ---
         correction = 0.0
-        if self.PID_enabled :
-            # L'erreur est : (Vitesse voulue) - (Vitesse mesurée)
-            error = abs(v_target) - self.abs_speed_meas
-            
-            self.integral += error * self.DT
-            self.integral = max(-self.integral_max, min(self.integral_max, self.integral))
-            
-            correction = (self.KP * error) + (self.KI * self.integral)
+        if self.pid_enabled_global and self.pid_active_esc:
+            error = abs_v_target - self.abs_speed_meas
+            self.integral = max(-self.integral_max, min(self.integral_max, self.integral + error * self.DT))
+            correction = (c['kp'] * error) + (c['ki'] * self.integral)
 
-        # --- SORTIE ---
-        # 1. Calculer la valeur brute dans une variable temporaire
-        raw_output = (cmd_ff + correction) * sign
-        
-        # 2. Appliquer le clamp sur cette nouvelle valeur
-        # Note la syntaxe propre : max(borne_basse, min(borne_haute, valeur))
-        self.cmd = max(cmd_min, min(cmd_max, raw_output))
-        
+        self.cmd = max(c['lim'][0], min(c['lim'][1], (cmd_ff + correction) * c['sign']))
         self.publish(self.cmd)
-    # ---------------------- debug ----------------------
-    
-    def debug_loop(self):
-        display_speed = self.abs_speed_meas * self.motor_direction
-
-        self.get_logger().info(
-            f"\r\n[DEBUG cmd_speed_controler] Cible: {self.target:.2f} | Mesuré: {display_speed:.2f} | Batterie: {self.vbat:.2f}V"
-        )
-        
-        if self.debug:
-            # --- Calcul des recommandations ---
-            rec_gain = self.gain
-            
-            # 1. Gain recommandé (seulement si on bouge assez pour que ce soit fiable)
-            if self.abs_speed_meas > 0.1 and abs(self.target) > 0.1:
-                # On calcule quel gain aurait été parfait pour atteindre la cible
-                rec_gain = (abs(self.target) * self.gain) / self.abs_speed_meas
-
-            self.get_logger().info(
-                f"\r\n[ACTUEL] Gain: {self.gain:.4f} | K_turn: {self.k_turn:.2f}                                                     "
-                f"\r\n[CONSEIL] Mets Gain = {rec_gain:.4f} | CMD: {self.cmd:.5f}                                         "
-                f"\r\nIntégrale: {self.integral:.3f} PID {self.PID_enabled}"
-                f"\r\n--------------------------------------------------------"
-            )
-
-    # ---------------------- publish ----------------------
 
     def publish(self, value):
-        msg = Float32()
-        msg.data = float(value)
-        self.pub.publish(msg)
+        self.pub.publish(Float32(data=float(value)))
 
+    def calibrate_loop(self):
+        meas = self.abs_speed_meas * self.motor_direction
+        
+        # 1. AFFICHAGE STATUT (Compact)
+        # Utile pour la surveillance générale
+        if self.info_enabled:
+            self.get_logger().info(f"STATUS | Tgt: {self.target:>5.2f} | Meas: {meas:>5.2f} | Bat: {self.vbat:.1f}V")
+
+        # 2. AFFICHAGE CALIBRATION (Détaillé)
+        # S'affiche seulement si calibrate est à True
+        if self.calibrate_enabled:
+            rec_gain = self.current_gain
+            if self.abs_speed_meas > 0.1 and abs(self.target) > 0.1:
+                rec_gain = (abs(self.target) * self.current_gain) / self.abs_speed_meas
+
+            self.get_logger().info(
+                f"calibrate CALIB | Cmd: {self.cmd:.4f} | Int: {self.integral:.3f}/{self.integral_max} | "
+                f"Gain Actuel: {self.current_gain:.4f} -> CONSEIL: {rec_gain:.4f}"
+            )
 
 def main(args=None):
     rclpy.init(args=args)
@@ -211,7 +145,6 @@ def main(args=None):
             rclpy.shutdown()
         except Exception:
             pass
-
 
 if __name__ == '__main__':
     main()

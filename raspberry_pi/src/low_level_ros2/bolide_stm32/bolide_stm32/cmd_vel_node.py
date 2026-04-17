@@ -216,7 +216,7 @@ class CommandSpeedNode(Node):
         self.braking_state = 1
         self.publish_pwm(self.PWM_REVERSE_MIN - 150)
         if self.debug:
-            self.get_logger().info(f"BRAKING_1 started PWM: {self.PWM_REVERSE_MIN - 150}\n\r")
+            self.get_logger().info(f"BRAKING_1 started PWM: {self.PWM_REVERSE_MIN - 250}\n\r")
         self.braking_1_timer.reset()  # restart timer
 
     def finish_braking_1(self):
