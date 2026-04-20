@@ -51,6 +51,7 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration('use_respawn')
     log_level = LaunchConfiguration('log_level')
     use_localization = LaunchConfiguration('use_localization')
+    use_intra_process_comms = LaunchConfiguration('use_intra_process_comms')
 
     # Map fully qualified names to relative ones so the node's namespace can be prepended.
     # In case of the transforms (tf), currently, there doesn't seem to be a better alternative
@@ -141,6 +142,12 @@ def generate_launch_description():
         'log_level', default_value='info', description='log level'
     )
 
+    declare_use_intra_process_comms_cmd = DeclareLaunchArgument(
+        'use_intra_process_comms',
+        default_value='True',
+        description='Use intra process communication',
+    )
+
     # Specify the actions
     bringup_cmd_group = GroupAction(
         [
@@ -170,7 +177,7 @@ def generate_launch_description():
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    os.path.join(launch_dir, 'localization_launch.py')
+                    os.path.join(race_launch_dir, 'localization_launch.py')
                 ),
                 condition=IfCondition(PythonExpression(['not ', slam, ' and ', use_localization])),
                 launch_arguments={
@@ -181,6 +188,7 @@ def generate_launch_description():
                     'params_file': params_file,
                     'use_composition': use_composition,
                     'use_respawn': use_respawn,
+                    'use_intra_process_comms': use_intra_process_comms,
                     'container_name': 'nav2_container',
                 }.items(),
             ),
@@ -195,6 +203,7 @@ def generate_launch_description():
                     'params_file': params_file,
                     'use_composition': use_composition,
                     'use_respawn': use_respawn,
+                    'use_intra_process_comms': use_intra_process_comms,
                     'container_name': 'nav2_container',
                 }.items(),
             ),
@@ -219,6 +228,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_use_localization_cmd)
+    ld.add_action(declare_use_intra_process_comms_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(bringup_cmd_group)
