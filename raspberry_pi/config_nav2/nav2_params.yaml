@@ -1,3 +1,63 @@
+# route_server et waypoint_follower sont retirer dans le launch file
+
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    # Odometry noise
+    alpha1: 0.1
+    alpha2: 0.1
+    alpha3: 0.1
+    alpha4: 0.1
+
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    # Laser model
+    laser_model_type: "likelihood_field"
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    max_beams: 120
+    laser_likelihood_max_dist: 2.0
+
+    # Particles
+    max_particles: 3000
+    min_particles: 500
+
+    scan_topic: "scan"
+
+    # Motion model
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+
+    set_initial_pose: false
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+    # TF output
+    tf_broadcast: true
+    transform_tolerance: 1.0
+
+    # Filter tuning
+    update_min_d: 0.10
+    update_min_a: 0.1
+    resample_interval: 1
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+
+    pf_err: 0.05
+    pf_z: 0.99
+    sigma_hit: 0.2
+    z_hit: 0.8
+    z_rand: 0.2
+    z_max: 0.05
+    z_short: 0.05
+    lambda_short: 0.1
+    save_pose_rate: 0.5
+
+
 bt_navigator:
   ros__parameters:
     global_frame: map
@@ -5,7 +65,7 @@ bt_navigator:
     odom_topic: /odom
     bt_loop_duration: 10
     filter_duration: 0.3
-    default_server_timeout: 60 #20
+    default_server_timeout: 60
     default_cancel_timeout: 50
     wait_for_service_timeout: 1000
     introspection_mode: "disabled"
@@ -39,7 +99,8 @@ bt_navigator:
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
-    costmap_update_timeout: 0.50 # 0.30
+    publish_zero_velocity: false
+    search_window: 2.5
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
@@ -77,9 +138,9 @@ controller_server:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
       # Vitesses limites
-      desired_linear_vel: 1.0          # vitesse de croisière (m/s)
+      desired_linear_vel: 1.4          # vitesse de croisière (m/s)
       max_linear_accel: 2.5            # accélération max (m/s²)
-      max_linear_decel: 2.5            # décélération max (m/s²)
+      max_linear_decel: -2.5            # décélération max (m/s²)
 
       # Lookahead
       lookahead_dist: 0.5              # distance lookahead fixe (m)
@@ -89,8 +150,6 @@ controller_server:
       use_velocity_scaled_lookahead_dist: true  # lookahead dynamique selon vitesse
 
       # Rotation vers la cible (approach)
-      rotate_to_heading_angular_vel: 0.0    # Ackermann : pas de rotation sur place
-      rotate_to_heading_min_angle: 0.785    # ~45° — seuil pour forcer rotation
       use_rotate_to_heading: false           # DÉSACTIVÉ : Ackermann ne tourne pas sur place
 
       # Régulation de vitesse en courbe
@@ -116,7 +175,7 @@ controller_server:
       # Direction
       allow_reversing: true            # passer à true si marche arrière supportée
 
-      use_dynamic_window : true
+      use_dynamic_window : false
       allow_obstacle_checking_beyond_goal: true
 
 
@@ -125,7 +184,6 @@ local_costmap:
   local_costmap:
     ros__parameters:
       update_frequency: 16.0
-      publish_frequency: 8.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
@@ -134,9 +192,9 @@ local_costmap:
       resolution: 0.05
       always_send_full_costmap: true
       introspection_mode: "disabled"
-      # Footprint polygonal (40x20 cm)
+      # Footprint polygonal (~40x22 cm)
       # Format : [[avant_gauche], [avant_droite], [arrière_droite], [arrière_gauche]]
-      footprint: "[[0.20, 0.10], [0.20, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      footprint: "[[0.20, 0.11], [0.20, -0.11], [-0.20, -0.10], [-0.20, 0.10]]"
       plugins: ["obstacle_layer", "range_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -167,9 +225,6 @@ local_costmap:
         no_readings_timeout: 0.5
 
 
-
-
-
 global_costmap:
   global_costmap:
     ros__parameters:
@@ -177,7 +232,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      footprint: "[[0.20, 0.10], [0.20, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      footprint: "[[0.20, 0.11], [0.20, -0.11], [-0.20, -0.10], [-0.20, 0.10]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -228,7 +283,7 @@ planner_server:
       analytic_expansion_max_cost_override: false
 
       # Contrainte cinématique Ackermann
-      minimum_turning_radius: 0.85        # rayon de braquage minimum (m)
+      minimum_turning_radius: 0.65        # rayon de braquage minimum (m)
 
       # Heuristique
       max_iterations: 1000000
@@ -301,27 +356,15 @@ behavior_server:
     rotational_acc_lim: 0.0
 
 
-waypoint_follower:
-  ros__parameters:
-    loop_rate: 20
-    stop_on_failure: false
-    introspection_mode: "disabled"
-    waypoint_task_executor_plugin: "wait_at_waypoint"
-    wait_at_waypoint:
-      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
-      enabled: true
-      waypoint_pause_duration: 200
-
-
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [2.0, 0.0, 2.0]
-    min_velocity: [-2.0, 0.0, -2.0]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
+    max_velocity: [3.0, 0.0, 2.0]
+    min_velocity: [-3.0, 0.0, -2.0]
+    max_accel: [3.0, 0.0, 3.2]
+    max_decel: [-3.0, 0.0, -3.2]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
@@ -345,8 +388,8 @@ collision_monitor:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "local_costmap/published_footprint"
-      time_before_collision: 1.2
-      simulation_time_step: 0.1
+      time_before_collision: 1.0
+      simulation_time_step: 0.05
       min_points: 6
       visualize: false
       enabled: true
@@ -354,8 +397,6 @@ collision_monitor:
     scan:
       type: "scan"
       topic: /scan
-      min_height: 0.05
-      max_height: 2.0
       enabled: true
 
 map_server:
@@ -369,17 +410,3 @@ map_saver:
     occupied_thresh_default: 0.65
     map_subscribe_transient_local: true
     introspection_mode: "disabled"
-
-docking_server:
-  ros__parameters:
-    controller_frequency: 0.1
-    dock_plugins: ["dummy_dock"]
-    dummy_dock:
-      plugin: "opennav_docking::SimpleChargingDock"
-    docks: ["dummy_dock_instance"]
-    dummy_dock_instance:
-      type: "dummy_dock"
-      frame: "map"
-      pose: [0.0, 0.0, 0.0]
-    introspection_mode: "disabled"
-

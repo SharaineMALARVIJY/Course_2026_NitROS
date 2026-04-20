@@ -1,14 +1,9 @@
 import math
 import time as t
-from typing import List, Tuple
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Quaternion
-from nav_msgs.msg import Path
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-
-
-Point = Tuple[float, float, float]
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
@@ -20,7 +15,7 @@ def yaw_to_quaternion(yaw: float) -> Quaternion:
     return q
 
 
-def make_pose(navigator: BasicNavigator, p: Point, frame_id: str = "map") -> PoseStamped:
+def make_pose(navigator: BasicNavigator, p, frame_id: str = "map") -> PoseStamped:
     pose = PoseStamped()
     pose.header.frame_id = frame_id
     pose.header.stamp = navigator.get_clock().now().to_msg()
@@ -46,60 +41,30 @@ def wait_for_keyboard_start() -> None:
         print("Commande invalide. Tape seulement 'd'.")
 
 
-def wait_for_task_result(navigator: BasicNavigator, logger, log_freq: int):
-    i = 0
+def wait_for_task_result(navigator: BasicNavigator, logger, lap: int, goal_idx: int):
     while not navigator.isTaskComplete():
-        i += 1
         feedback = navigator.getFeedback()
 
-        if feedback and i % log_freq == 0:
-            distance = getattr(feedback, "distance_to_goal", None)
-            if distance is None:
-                distance = getattr(feedback, "distance_remaining", None)
-
+        if feedback:
+            distance = getattr(feedback, "distance_remaining", None)
             if distance is not None:
-                logger.info(f"Distance restante: {distance:.2f} m")
-
+                logger.info(
+                    f"Lap {lap}: goal {goal_idx}: remaining {distance:.2f} m",
+                    throttle_duration_sec=1.0 
+                )
         t.sleep(0.05)
-
     return navigator.getResult()
 
 
-def append_path(dst: Path, src: Path) -> None:
-    """
-    Concatène src dans dst en évitant de dupliquer
-    le point de jonction entre deux segments.
-    """
-    if src is None or not src.poses:
-        return
+def run_recovery(navigator: BasicNavigator, logger) -> None:
+    logger.warn("Recovery: backup")
+    navigator.backup(backup_dist=0.3, backup_speed=0.5, time_allowance=2)
 
-    if not dst.poses:
-        dst.header = src.header
-        dst.poses = list(src.poses)
-        return
+    while not navigator.isTaskComplete():
+        t.sleep(0.05)
 
-    dst.poses.extend(src.poses[1:])
-
-
-def repeat_path(navigator: BasicNavigator, base_path: Path, laps: int) -> Path:
-    """
-    Répète un chemin de base 'laps' fois.
-    On évite de dupliquer la première pose au raccord entre deux tours.
-    """
-    repeated = Path()
-    repeated.header.frame_id = base_path.header.frame_id if base_path.header.frame_id else "map"
-    repeated.header.stamp = navigator.get_clock().now().to_msg()
-
-    if laps < 1 or not base_path.poses:
-        return repeated
-
-    for lap_idx in range(laps):
-        if lap_idx == 0:
-            repeated.poses.extend(base_path.poses)
-        else:
-            repeated.poses.extend(base_path.poses[1:])
-
-    return repeated
+    recovery_result = navigator.getResult()
+    logger.info(f"Recovery result: {recovery_result}")
 
 
 def main() -> None:
@@ -109,10 +74,7 @@ def main() -> None:
     logger = navigator.get_logger()
 
     navigator.declare_parameter("laps", 1)
-    navigator.declare_parameter("log_frequency", 5)
-
-    navigator.declare_parameter("planner_id", "GridBased")
-    navigator.declare_parameter("controller_id", "FollowPath")
+    navigator.declare_parameter("max_retries", 30)
 
     navigator.declare_parameter("p0", [0.0, 0.0, 0.0])
 
@@ -127,52 +89,45 @@ def main() -> None:
     navigator.declare_parameter("p4", [0.0, 0.0, 0.0])
 
     laps = int(navigator.get_parameter("laps").value)
-    log_freq = int(navigator.get_parameter("log_frequency").value)
-    planner_id = str(navigator.get_parameter("planner_id").value)
-    controller_id = str(navigator.get_parameter("controller_id").value)
+    max_retries = int(navigator.get_parameter("max_retries").value)
 
-    p0 = tuple(navigator.get_parameter("p0").value)
+    p0 = navigator.get_parameter("p0").value
 
-    use_p1 = bool(navigator.get_parameter("use_p1").value)
-    use_p2 = bool(navigator.get_parameter("use_p2").value)
-    use_p3 = bool(navigator.get_parameter("use_p3").value)
-    use_p4 = bool(navigator.get_parameter("use_p4").value)
+    use_p1 = navigator.get_parameter("use_p1").value
+    use_p2 = navigator.get_parameter("use_p2").value
+    use_p3 = navigator.get_parameter("use_p3").value
+    use_p4 = navigator.get_parameter("use_p4").value
 
-    p1 = tuple(navigator.get_parameter("p1").value)
-    p2 = tuple(navigator.get_parameter("p2").value)
-    p3 = tuple(navigator.get_parameter("p3").value)
-    p4 = tuple(navigator.get_parameter("p4").value)
+    p1 = navigator.get_parameter("p1").value
+    p2 = navigator.get_parameter("p2").value
+    p3 = navigator.get_parameter("p3").value
+    p4 = navigator.get_parameter("p4").value
 
     if not validate_point(logger, "p0", p0):
         navigator.destroy_node()
         rclpy.shutdown()
         return
 
-    selected_points = {
-        "p1": p1,
-        "p2": p2,
-        "p3": p3,
-        "p4": p4,
+    points = {
+        "p1": (use_p1, p1),
+        "p2": (use_p2, p2),
+        "p3": (use_p3, p3),
+        "p4": (use_p4, p4),
     }
 
-    for name, p in selected_points.items():
+    goal_points_one_lap = []
+
+    for name, (use, p) in points.items():
         if not validate_point(logger, name, p):
             navigator.destroy_node()
             rclpy.shutdown()
             return
 
-    goal_points_one_lap: List[Tuple[str, Point]] = []
-    if use_p1:
-        goal_points_one_lap.append(("p1", p1))
-    if use_p2:
-        goal_points_one_lap.append(("p2", p2))
-    if use_p3:
-        goal_points_one_lap.append(("p3", p3))
-    if use_p4:
-        goal_points_one_lap.append(("p4", p4))
+        if use:
+            goal_points_one_lap.append((name, make_pose(navigator, p)))
 
-    if len(goal_points_one_lap) < 2:
-        logger.error("Need at least 2 active points. Enable at least two of use_p1..use_p4")
+    if not goal_points_one_lap:
+        logger.error("No active goal points. Enable at least one of use_p1..use_p4")
         navigator.destroy_node()
         rclpy.shutdown()
         return
@@ -183,17 +138,16 @@ def main() -> None:
         rclpy.shutdown()
         return
 
-    if log_freq < 1:
-        logger.error("log_frequency must be >= 1")
+    if max_retries < 1:
+        logger.error("max_retries must be >= 1")
         navigator.destroy_node()
         rclpy.shutdown()
         return
 
-    logger.info(f"Initial pose p0: {p0}")
-    logger.info(f"Planner: {planner_id}")
-    logger.info(f"Controller: {controller_id}")
-    logger.info(f"Laps: {laps}")
-    logger.info(f"Ordered waypoints: {[name for name, _ in goal_points_one_lap]}")
+    logger.info(f"Initial pose: {p0}")
+    logger.info(f"Active goals per lap: {len(goal_points_one_lap)}")
+    logger.info(f"Total goals over all laps: {len(goal_points_one_lap) * laps}")
+    logger.info(f"Max retries per goal: {max_retries}")
 
     navigator.setInitialPose(make_pose(navigator, p0))
 
@@ -203,85 +157,52 @@ def main() -> None:
 
     wait_for_keyboard_start()
 
-    lap_path = Path()
-    lap_path.header.frame_id = "map"
-    lap_path.header.stamp = navigator.get_clock().now().to_msg()
+    for lap in range(1, laps + 1):
+        logger.info(f"Starting lap {lap}/{laps}")
 
-    first_name, first_values = goal_points_one_lap[0]
+        for goal_idx, (goal_name, goal_values) in enumerate(goal_points_one_lap, start=1):
+            success = False
 
-    logger.info(f"Planning initial segment p0 -> {first_name}")
-    initial_segment = navigator.getPath(
-        start=make_pose(navigator, p0),
-        goal=make_pose(navigator, first_values),
-        planner_id=planner_id,
-        use_start=True,
-    )
+            for attempt in range(1, max_retries + 1):
+                
+                logger.info(
+                    f"Lap {lap}: sending {goal_name} "
+                    f"({goal_idx}/{len(goal_points_one_lap)}) "
+                    f"attempt {attempt}/{max_retries}"
+                )
 
-    if initial_segment is None or not initial_segment.poses:
-        logger.error(f"Failed to plan initial segment p0 -> {first_name}")
-        navigator.destroy_node()
-        rclpy.shutdown()
-        return
+                navigator.goToPose(goal_values)
+                result = wait_for_task_result(navigator, logger, lap, goal_idx)
 
-    logger.info(f"Initial segment p0->{first_name}: {len(initial_segment.poses)} poses")
-    append_path(lap_path, initial_segment)
+                if result == TaskResult.SUCCEEDED:
+                    logger.info(f"Lap {lap}: {goal_name} succeeded")
+                    success = True
+                    break
 
-    logger.info("Planning lap segments once at startup...")
-    for i in range(len(goal_points_one_lap)):
-        start_name, start_values = goal_points_one_lap[i]
-        goal_name, goal_values = goal_points_one_lap[(i + 1) % len(goal_points_one_lap)]
+                if result == TaskResult.CANCELED:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} canceled "
+                        f"({attempt}/{max_retries})"
+                    )
+                elif result == TaskResult.FAILED:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} failed "
+                        f"({attempt}/{max_retries})"
+                    )
+                    run_recovery(navigator, logger)
+                else:
+                    logger.warn(
+                        f"Lap {lap}: {goal_name} unknown result={result} "
+                        f"({attempt}/{max_retries})"
+                    )
 
-        logger.info(f"Planning segment {start_name} -> {goal_name}")
-        segment = navigator.getPath(
-            start=make_pose(navigator, start_values),
-            goal=make_pose(navigator, goal_values),
-            planner_id=planner_id,
-            use_start=True,
-        )
+            if not success:
+                logger.error(
+                    f"Lap {lap}: {goal_name} reached max retries "
+                    f"({max_retries}), skipping"
+                )
 
-        if segment is None or not segment.poses:
-            logger.error(f"Failed to plan segment {start_name} -> {goal_name}")
-            navigator.destroy_node()
-            rclpy.shutdown()
-            return
-
-        logger.info(f"Segment {start_name}->{goal_name}: {len(segment.poses)} poses")
-        append_path(lap_path, segment)
-
-    if not lap_path.poses:
-        logger.error("Generated lap path is empty")
-        navigator.destroy_node()
-        rclpy.shutdown()
-        return
-
-    race_path = repeat_path(navigator, lap_path, laps)
-
-    if not race_path.poses:
-        logger.error("Generated race path is empty")
-        navigator.destroy_node()
-        rclpy.shutdown()
-        return
-
-    logger.info(f"Lap path poses: {len(lap_path.poses)}")
-    logger.info(f"Race path poses: {len(race_path.poses)}")
-
-    logger.info("Starting FollowPath...")
-    navigator.followPath(
-        path=race_path,
-        controller_id=controller_id,
-    )
-
-    result = wait_for_task_result(navigator, logger, log_freq)
-
-    if result == TaskResult.SUCCEEDED:
-        logger.info("Race path completed successfully")
-    elif result == TaskResult.CANCELED:
-        logger.warn("Race path canceled")
-    elif result == TaskResult.FAILED:
-        logger.error("Race path failed")
-    else:
-        logger.warn(f"Race path unknown result={result}")
-
+    logger.info("All laps completed.")
     navigator.destroy_node()
     rclpy.shutdown()
 

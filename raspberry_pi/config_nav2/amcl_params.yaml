@@ -14,9 +14,10 @@ amcl:
 
     # Laser model
     laser_model_type: "likelihood_field"
-    laser_max_range: 30.0
+    laser_max_range: 100.0
     laser_min_range: -1.0
-    max_beams: 100
+    max_beams: 120
+    laser_likelihood_max_dist: 2.0
 
     # Particles
     max_particles: 3000
@@ -39,8 +40,8 @@ amcl:
     transform_tolerance: 1.0
 
     # Filter tuning
-    update_min_d: 0.20
-    update_min_a: 0.2
+    update_min_d: 0.10
+    update_min_a: 0.1
     resample_interval: 1
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
@@ -53,6 +54,5 @@ amcl:
     z_max: 0.05
     z_short: 0.05
     lambda_short: 0.1
-    laser_likelihood_max_dist: 4.0
     save_pose_rate: 0.5
 
