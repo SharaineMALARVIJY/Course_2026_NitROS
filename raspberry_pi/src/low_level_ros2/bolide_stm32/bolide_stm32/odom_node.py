@@ -10,8 +10,10 @@ from tf2_ros import TransformBroadcaster
 from tf_transformations import euler_from_quaternion
 
 class ForkYawOdom(Node):
+    MAX_OMEGA   = 3.0    # (rad/s) Clamp physique
     MAX_DT = 0.2        
     YAW_TIMEOUT = 0.5 
+    ALPHA_OMEGA = 0.4
 
     def __init__(self):
         super().__init__("fork_yaw_odom")
@@ -23,12 +25,15 @@ class ForkYawOdom(Node):
         self.x     = 0.0
         self.y     = 0.0
         self.v     = 0.0      # Vitesse linéaire (lissée par stm32_node)
-        self.omega = 0.0      # Vitesse angulaire (calculée/lissée par stm32_node)
+        self.omega = 0.0      # Vitesse angulaire
         self.yaw   = 0.0      # Orientation actuelle
-        self.last_yaw = 0.0 # Pour l'intégration trapézoïdale
-        self.current_q = Quaternion() # Stockage direct du quaternion IMU
+        self.last_yaw_odom = 0.0 # Pour l'intégration trapézoïdale
+        self.current_q = Quaternion()
         self.esc_state = 0
         self.first_yaw_received = False
+
+        self.last_yaw = None
+        self.last_imu_time = self.get_clock().now()
 
         # --- Timestamps ---
         self.last_update_time = self.get_clock().now()
@@ -47,7 +52,7 @@ class ForkYawOdom(Node):
         p_cov[14] = 1e6  # Z (Invalide)
         p_cov[21] = 1e6  # Roll (Invalide)
         p_cov[28] = 1e6  # Pitch (Invalide)
-        p_cov[35] = 0.02 # Yaw (Très précis grâce au BNO055) (old 0.05)
+        p_cov[35] = 0.02 # Yaw (Très précis grâce au BNO055)
         self.odom_msg.pose.covariance = p_cov
 
         # --- Covariances Twist ---
@@ -57,7 +62,7 @@ class ForkYawOdom(Node):
         t_cov[14] = 1e6
         t_cov[21] = 1e6
         t_cov[28] = 1e6
-        t_cov[35] = 0.05 # old 0.2
+        t_cov[35] = 0.05
         self.odom_msg.twist.covariance = t_cov
 
         # --- Pub / Sub ---
@@ -69,7 +74,7 @@ class ForkYawOdom(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         self.timer = self.create_timer(0.02, self.publish_odom)
-        self.get_logger().info("Odométrie v4 lancée")
+        self.get_logger().info("Odométrie lancée")
 
     def esc_state_callback(self, msg):
         self.esc_state = msg.data
@@ -78,15 +83,38 @@ class ForkYawOdom(Node):
         self.v = float(msg.speed) if self.esc_state >= 0 else -float(msg.speed)
 
     def on_imu(self, msg: Imu):
-        self.current_q = msg.orientation
-        _, _, yaw = euler_from_quaternion([self.current_q.x, self.current_q.y, self.current_q.z, self.current_q.w])
-        
-        if not self.first_yaw_received:
-            self.last_yaw = yaw
-            self.first_yaw_received = True
+            self.current_q = msg.orientation
+            # Conversion quaternion vers yaw
+            _, _, self.yaw = euler_from_quaternion([self.current_q.x, self.current_q.y, self.current_q.z, self.current_q.w])
+
+            # initialisation
+            if not self.first_yaw_received:
+                self.last_yaw_odom = self.yaw
+                self.last_yaw = self.yaw
+                self.first_yaw_received = True
+
+            now = self.get_clock().now()
+            dt = (now - self.last_imu_time).nanoseconds * 1e-9
             
-        self.yaw, self.omega = yaw, msg.angular_velocity.z
-        self.last_imu_time = rclpy.time.Time.from_msg(msg.header.stamp)
+            # Calcul de l'omega par dérivation
+            if self.last_yaw is not None and 0.001 < dt < 0.2:
+                delta_yaw = self.yaw - self.last_yaw
+                # Gestion du saut entre -pi et pi
+                if delta_yaw > math.pi: delta_yaw -= 2.0 * math.pi
+                elif delta_yaw < -math.pi: delta_yaw += 2.0 * math.pi
+                
+                raw_omega = delta_yaw / dt
+                # Clamp physique
+                if abs(raw_omega) > self.MAX_OMEGA:
+                    raw_omega = 0.0
+                    self.get_logger().warn(
+                        f"Omega aberrant ignoré ({raw_omega:.2f} rad/s)",
+                        throttle_duration_sec=2.0
+                    )
+                self.omega = (self.ALPHA_OMEGA * raw_omega) + (1.0 - self.ALPHA_OMEGA) * self.omega
+            
+            self.last_yaw = self.yaw
+            self.last_imu_time = now
 
     def publish_odom(self):
         if not self.first_yaw_received: return
@@ -101,10 +129,10 @@ class ForkYawOdom(Node):
 
         # --- Intégration Trapézoïdale ---
         # On utilise la moyenne de l'angle sur le pas de temps pour plus de précision
-        avg_yaw = self.last_yaw + (self.yaw - self.last_yaw) * 0.5
+        avg_yaw = self.last_yaw_odom + (self.yaw - self.last_yaw_odom) * 0.5
         self.x += self.v * math.cos(avg_yaw) * dt
         self.y += self.v * math.sin(avg_yaw) * dt
-        self.last_yaw = self.yaw
+        self.last_yaw_odom = self.yaw
 
         # --- Remplissage du message ---
         self.odom_msg.header.stamp = now.to_msg()

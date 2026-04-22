@@ -14,30 +14,27 @@ class STM32_Parser(Node):
 
         # --- PARAMÈTRES ---
         self.declare_parameter('debug', True)
+        self.declare_parameter('alpha_vbat', 0.05)
+        self.declare_parameter('alpha_speed', 0.4)
+
         self.debug = self.get_parameter('debug').value
-        self.old_vbat = 8.0  # tension nominale
 
         # --- ÉTAT INTERNE & FILTRES ---
-        self.last_yaw = None
-        self.last_time = self.get_clock().now()
-        self.omega_filtered = 0.0
         self.speed_filtered = 0.0  
-        
-        self.ALPHA_VBAT = 0.01
-        self.ALPHA_OMEGA = 0.3
-        self.ALPHA_SPEED = 0.3
-        self.DEADZONE_OMEGA = 0.002 
+        self.old_vbat = 8.0  # tension nominale
+        self.ALPHA_VBAT = self.get_parameter('alpha_vbat').value
+        self.ALPHA_SPEED = self.get_parameter('alpha_speed').value
 
         # --- CONSTANTES & FACTEURS PRÉ-CALCULÉS ---
-        self.YAW_FACTOR = -(2.0 * math.pi) / 5760.0                 # 5760 pour 2pi (cf datasheet BNO055)
+        self.YAW_FACTOR = -(2.0 * math.pi) / 5760.0                 # 5760 pour 2pi (cf datasheet BNO055), signe convention ROS2
+        self.YAW_RATE_FACTOR = 2.0 * -self.YAW_FACTOR               # shift 1 bit et signe convention ROS2
         self.VBAT_FACTOR = 8.0 * (3.3 / 4095.0) * (1560.0 / 560.0)
-        #self.YAW_RATE_FACTOR = 2.0 * -self.YAW_FACTOR               # shift 1 bit et signe oppose
 
         ## Batterie (Conversion ADC -> Volts)
         # bat_raw : valeur ADC brute -> Le STM32 a un ADC 12 bits, il quantifie sur 4096 valeurs
         # bat_adc = bat_raw << 3  # les valeurs ADC semblent décalées de 3 bits => bat_adc : 0 <-> 4095
         # v_adc = bat_adc * (3.3 / 4095.0)  # conversion ADC -> Volts (V_ADC) : entre 0V et 3.3V
-        # vbat = v_adc * ((1000 + 560) / 560)   # Pont diviseur de tension dans le schema du Hat : V_ADC = VS * (R3 / (R4 + R3)) avec R3=560, R4=1k
+        # vbat = v_adc * ((1000 + 560) / 560) # Pont diviseur de tension (schema du Hat) : V_ADC = VS * (R3 / (R4 + R3)) avec R3=560, R4=1k
 
         # --- SPI ---
         self.spi = spidev.SpiDev()
@@ -62,7 +59,7 @@ class STM32_Parser(Node):
         # --- CONFIG RANGES ---
         self.ir_min_range, self.ir_max_range = 0.06, 0.3
         self.ir_field_of_view = 0.09
-        self.sonar_max_range = 0.7
+        self.sonar_max_range = 0.7 # TODO check value
 
         # --- MESSAGES PRÉ-REMPLIS ---
         self.sensor_data = Float32MultiArray()
@@ -71,7 +68,7 @@ class STM32_Parser(Node):
 
         self.imu_data = Imu()
         self.imu_data.header.frame_id = "base_link"
-        self.imu_data.angular_velocity_covariance = [1e-6, 0.0, 0.0, 0.0, 1e-6, 0.0, 0.0, 0.0, 0.01] # On met 1e-6 au lieu de 0.0 pour Nav2
+        self.imu_data.angular_velocity_covariance = [1e-6, 0.0, 0.0, 0.0, 1e-6, 0.0, 0.0, 0.0, 0.01] # TODO check datasheet
         self.imu_data.orientation_covariance = [1e-6, 0.0, 0.0, 0.0, 1e-6, 0.0, 0.0, 0.0, 0.01]
         self.imu_data.linear_acceleration_covariance = [0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.1]
         
@@ -79,7 +76,7 @@ class STM32_Parser(Node):
         self.range_msg_right = self.create_range_msg("ir_right_frame", Range.INFRARED, self.ir_max_range, self.ir_min_range, self.ir_field_of_view)
         self.range_msg_sonar = self.create_range_msg("sonar_frame", Range.ULTRASOUND, self.sonar_max_range)
 
-        self.timer = self.create_timer(0.01, self.receiveSensorData)
+        self.timer = self.create_timer(0.02, self.receiveSensorData)
 
     def create_range_msg(self, frame, r_type, max_range, min_range=0.0, field_of_view=0.26):
         msg = Range()
@@ -88,6 +85,11 @@ class STM32_Parser(Node):
         msg.min_range, msg.max_range = min_range, max_range
         msg.field_of_view = field_of_view
         return msg
+    
+    def publish_range(self, publisher, msg, distance, timestamp):
+        msg.header.stamp = timestamp
+        msg.range = float(distance)
+        publisher.publish(msg)
 
     def receiveSensorData(self):
         now = self.get_clock().now()
@@ -100,60 +102,47 @@ class STM32_Parser(Node):
             self.get_logger().error(f"SPI error: {e}", throttle_duration_sec=2.0)
             return
 
-        if self.crc32mpeg2(data): return
+        if self.crc32mpeg2(data): return    # frequent CRC errors -> reduce timer (STM32 is too slow) or cable length
 
-        try:
+        try: # struct.unpack -> !: Big-Endian, H: uint16, h: int16
             raw_vbat, raw_yaw, raw_ir_l, raw_ir_r, raw_speed, raw_us, raw_acc_x, raw_yaw_rate = struct.unpack('!HhHHHHhh', bytes(data[:16]))
         except struct.error: return
 
         vbat = raw_vbat * self.VBAT_FACTOR  # tension batterie moteur en V
         yaw = raw_yaw * self.YAW_FACTOR     # rad - twist z axis (vertical) -
-        speed_val = raw_speed * 0.002       # m/s speed from the fork -1 bit shift-
+        speed_val = raw_speed * 0.002       # m/s speed from the fork -1 bit shift- (There may be issues in the STM32 code, see below)
         dist_us = raw_us * 0.01             # m  - distance from the ultrasound sensor -
         acc_x = raw_acc_x * 0.01            # ms^-2 - acceleration in the x axis -
-        #yaw_rate = raw_yaw_rate * self.YAW_RATE_FACTOR # rad/s - rotation speed z-axis - can be used alternatively if filtered
+        yaw_rate = raw_yaw_rate * self.YAW_RATE_FACTOR # rad/s - rotation speed z-axis - (There may be issues in the STM32 code, see below)
 
         ## Fork Speed
-        self.speed_filtered = (self.ALPHA_SPEED * speed_val) + (1.0 - self.ALPHA_SPEED) * self.speed_filtered
-        self.fork_data.header.stamp = timestamp
-        self.fork_data.speed = self.speed_filtered
+        # There are sometimes weird values : nulls, or old values when it should be null
+        # Filtrage passe-bas (Lissage)
+        # self.speed_filtered = (self.ALPHA_SPEED * speed_val) + (1.0 - self.ALPHA_SPEED) * self.speed_filtered
+        # speed_val = float(self.speed_filtered)
+        # Publication
+        self.fork_data.header.stamp = timestamp # The fork's publication freq is probably at 20Hz, we don't know (STM32 code)
+        self.fork_data.speed = speed_val
         self.speed_pub.publish(self.fork_data)
 
-        ## IMU calculate omage by derivating yaw (more stable than raw_yaw_rate)
-        dt = (now - self.last_time).nanoseconds * 1e-9
-        yaw_rate = self.omega_filtered 
-
-        if self.last_yaw is not None and 0.001 < dt < 0.1:
-            delta_yaw = yaw - self.last_yaw
-            if delta_yaw > math.pi: delta_yaw -= 2.0 * math.pi
-            elif delta_yaw < -math.pi: delta_yaw += 2.0 * math.pi
-            
-            raw_omega = delta_yaw / dt
-            if abs(raw_omega) < self.DEADZONE_OMEGA: raw_omega = 0.0
-            
-            self.omega_filtered = (self.ALPHA_OMEGA * raw_omega) + (1.0 - self.ALPHA_OMEGA) * self.omega_filtered
-            yaw_rate = self.omega_filtered
-
-        # Publish IMU
+        # IMU
         self.imu_data.header.stamp = timestamp
         self.imu_data.orientation.z = math.sin(yaw * 0.5)
         self.imu_data.orientation.w = math.cos(yaw * 0.5)
-        self.imu_data.angular_velocity.z = float(yaw_rate)
+        self.imu_data.angular_velocity.z = float(yaw_rate)  # can be used if filtered but noisy (weird null values and shifting offset)
         self.imu_data.linear_acceleration.x = acc_x
         self.imu_pub.publish(self.imu_data)
 
-        self.last_yaw, self.last_time = yaw, now
-
         ## Ranges
         ir_l_v = raw_ir_l * 0.001
-        ir_left = (15.38/ir_l_v - 0.42)/100.0 if ir_l_v > 0.005 else self.ir_max_range
+        ir_left = (15.38/ir_l_v - 0.42)/100.0 if ir_l_v > 0.005 else self.ir_max_range # experimental factor and noise threshold
         ir_left = min(max(ir_left, 0.0), self.ir_max_range)
 
         ir_r_v = raw_ir_r * 0.001
-        ir_right = (15.38/ir_r_v - 0.42)/100.0 if ir_r_v > 0.005 else self.ir_max_range
+        ir_right = (15.38/ir_r_v - 0.42)/100.0 if ir_r_v > 0.005 else self.ir_max_range # experimental factor and noise threshold
         ir_right = min(max(ir_right, 0.0), self.ir_max_range)
 
-        distance_US = dist_us if dist_us > 0.001 else self.sonar_max_range
+        distance_US = dist_us if dist_us > 0.001 else self.sonar_max_range # experimental noise threshold (unchecked)
 
         self.publish_range(self.pub_ir_left, self.range_msg_left, ir_left, timestamp)
         self.publish_range(self.pub_ir_right, self.range_msg_right, ir_right, timestamp)
@@ -165,7 +154,7 @@ class STM32_Parser(Node):
         self.vbat_msg.data = float(self.old_vbat)
         self.vbat_pub.publish(self.vbat_msg)
 
-        # Topic de debug
+        # Debug topic
         if self.debug:
             self.sensor_data.data = [float(yaw), float(speed_val), float(ir_left), 
                                      float(ir_right), float(dist_us), float(acc_x), float(yaw_rate)]
@@ -192,11 +181,6 @@ class STM32_Parser(Node):
         self.tx_full_buffer[1] = val & 0xFF
         crc = self.crc32mpeg2(self.tx_full_buffer[:2])
         self.tx_full_buffer[2:6] = list(struct.pack('!I', crc))
-
-    def publish_range(self, publisher, msg, distance, timestamp):
-        msg.header.stamp = timestamp
-        msg.range = float(distance)
-        publisher.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)

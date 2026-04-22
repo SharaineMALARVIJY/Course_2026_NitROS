@@ -15,12 +15,12 @@ class SpeedControllerNode(Node):
                 ('max_speed_reverse', 1.5),
                 ('frequency', 50),
                 ('PID_enabled', True),
-                ('kp_fwd', 0.08),
-                ('ki_fwd', 0.8),
-                ('gain_fwd', 0.023),
+                ('kp_fwd', 0.1),
+                ('ki_fwd', 0.2),
+                ('gain_fwd', 0.05),
                 ('kp_rev', 0.1),
-                ('ki_rev', 0.5),
-                ('gain_rev', 0.02),
+                ('ki_rev', 0.2),
+                ('gain_rev', 0.2),
                 ('integral_max', 0.3),
                 ('info', True),       # Pour l'affichage minimal de statut
                 ('calibrate', True),      # Pour l'affichage de calibration complet
@@ -118,7 +118,7 @@ class SpeedControllerNode(Node):
         # 1. AFFICHAGE STATUT (Compact)
         # Utile pour la surveillance générale
         if self.info_enabled:
-            self.get_logger().info(f"STATUS | Tgt: {self.target:>5.2f} | Meas: {meas:>5.2f} | Bat: {self.vbat:.1f}V")
+            self.get_logger().info(f"STATUS | Tgt: {self.target:>5.2f} | Meas: {meas:>5.2f} | Bat: {self.vbat:.1f}V\n\r")
 
         # 2. AFFICHAGE CALIBRATION (Détaillé)
         # S'affiche seulement si calibrate est à True

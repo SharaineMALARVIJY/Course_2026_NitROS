@@ -1,11 +1,5 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import RegisterEventHandler
-from launch.event_handlers import OnProcessExit
-from launch.actions import EmitEvent
-from launch.events import Shutdown
-
-restart_on_error = False
 
 def generate_launch_description():
     sllidar = Node(
@@ -13,7 +7,6 @@ def generate_launch_description():
         executable="sllidar_node",
         name="sllidar_node",
         output="screen",
-        respawn=restart_on_error,
         parameters=[
             {"serial_port": "/dev/ttyLIDAR"},
             {"serial_baudrate": 256000},
@@ -32,20 +25,22 @@ def generate_launch_description():
         executable="stm32_node",
         name="stm32_node",
         output="screen",
-        respawn=restart_on_error,
-        parameters=[{"debug": True}],
+        parameters=[{"debug": True,
+                     'alpha_vbat': 0.05,
+                     'alpha_speed': 0.4}]
     )
     cmd_vel_node = Node(
         package="bolide_stm32",
         executable="cmd_vel_node",
         name="cmd_vel_node",
         output="screen",
-        respawn=restart_on_error,
         parameters=[{"debug": False}]
     )
     speed_controller = Node(
     package='bolide_stm32',
     executable='speed_controller_node',
+    name='speed_controller_node',
+    output="screen",
     parameters=[{
         'max_speed_forward': 3.0,
         'max_speed_reverse': 1.5,
@@ -68,7 +63,6 @@ def generate_launch_description():
         executable="cmd_twist_bridge_node",
         name="cmd_twist_bridge_node",
         output="screen",
-        respawn=restart_on_error,
         parameters=[{"debug": False}],
     )
     cmd_dir_node = Node(
@@ -76,7 +70,6 @@ def generate_launch_description():
         executable="cmd_dir_node",
         name="cmd_dir_node",
         output="screen",
-        respawn=restart_on_error,
         parameters=[{"debug": False},
                     {'baudrate': 1000000},
                     {'max_steering_angle': 22.8},       # steering angle de chaque côté (en °) -ne correspond pas exactement à l'angle réel-
@@ -175,7 +168,7 @@ def generate_launch_description():
             odom_node,
             tf_base_to_link,
             tf_link_to_laser,
-            # tf_link_to_sonar, #jamais tester
+            # tf_link_to_sonar, #jamais testé
             tf_link_to_ir_left,
             tf_link_to_ir_right,
             sllidar,
