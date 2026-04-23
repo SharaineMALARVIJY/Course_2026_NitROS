@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Int16
-from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
 import numpy as np
 import json
 import time
@@ -13,11 +13,11 @@ class AutoCalibrator(Node):
         # --- PARAMÈTRES ROS ---
         self.declare_parameter('wheelbase', 0.257)      # Tamiya TT02 Standard
         self.declare_parameter('v_test', 0.5)           # m/s vitesse stable
-        self.declare_parameter('direction_mode', 'forward') 
+        self.declare_parameter('direction_mode', 'forward') # 'forward' or 'reverse'
         self.declare_parameter('servo_center', 512)     
         self.declare_parameter('servo_step', 4)         
         self.declare_parameter('stalling_threshold', 0.3) # Sensibilité butée en degrés
-        self.declare_parameter('samples_per_step', 15)   # Retour du moyennage
+        self.declare_parameter('samples_per_step', 15)   # Moyennage
 
         self.L = self.get_parameter('wheelbase').value
         self.v_test = self.get_parameter('v_test').value
@@ -34,13 +34,14 @@ class AutoCalibrator(Node):
         # --- PUBS / SUBS ---
         self.pub_servo = self.create_publisher(Int16, '/raw_servo_pos', 10)
         self.pub_speed = self.create_publisher(Float32, '/cmd_speed_target', 10)
-        self.sub_imu = self.create_subscription(Imu, '/imu', self.imu_cb, 10)
+        self.sub_odom = self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
 
         # Lancement automatique après 2 secondes
         self.timer = self.create_timer(2.0, self.execute_calibration)
 
-    def imu_cb(self, msg):
-        self.current_yaw_rate = msg.angular_velocity.z
+    def odom_cb(self, msg):
+        # Récupération du yaw rate depuis l'odométrie
+        self.current_yaw_rate = msg.twist.twist.angular.z
 
     def get_measured_angle_with_averaging(self):
         """Prend plusieurs mesures pour filtrer le bruit"""

@@ -76,6 +76,10 @@ class STM32_Parser(Node):
         self.range_msg_right = self.create_range_msg("ir_right_frame", Range.INFRARED, self.ir_max_range, self.ir_min_range, self.ir_field_of_view)
         self.range_msg_sonar = self.create_range_msg("sonar_frame", Range.ULTRASOUND, self.sonar_max_range)
 
+        # ESC state to solve fork issues
+        self.esc_state = 0 # Par défaut neutre
+        self.create_subscription(Int16, '/esc_state', self.esc_state_callback, 10)
+
         self.timer = self.create_timer(0.01, self.receiveSensorData)
 
     def create_range_msg(self, frame, r_type, max_range, min_range=0.0, field_of_view=0.26):
@@ -119,6 +123,15 @@ class STM32_Parser(Node):
         yaw_rate = raw_yaw_rate * self.YAW_RATE_FACTOR # rad/s - rotation speed z-axis - (There may be issues in the STM32 code, see below)
 
         ## Fork Speed : There are sometimes weird values : nulls, or old values when it should be null
+        if self.esc_state == 0: # Si l'ESC est au neutre, la vitesse est 0
+            self.speed_filtered = 0.0
+        else:
+            # On protège seulement contre les glitchs SPI (zéros aberrants en plein mouvement)
+            if abs(speed_val) < 0.001 and abs(self.speed_filtered) > 0.3:
+                speed_val = self.speed_filtered
+            # Lissage classique
+            self.speed_filtered = (self.ALPHA_SPEED * speed_val) + (1.0 - self.ALPHA_SPEED) * self.speed_filtered
+        speed_val = float(self.speed_filtered)
         # Publication
         self.fork_data.header.stamp = timestamp # The fork's publication freq is probably at 20Hz, we don't know (STM32 code)
         self.fork_data.speed = speed_val

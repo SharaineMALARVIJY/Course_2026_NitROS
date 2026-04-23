@@ -38,8 +38,6 @@ class CommandSpeedNode(Node):
         # deadzone de cmd_speed : remapping de la deadzone de l'ESC pour être plus linéaire en vitesse
         self.CMD_DEADZONE = self.get_parameter('cmd_deadzone').value
         self.SEUIL_FOURCHE = 0.05
-        # temps max sans commande avant neutre    
-        self.SAFETY_TIMEOUT = 1.0 # en s : temp autorisé sans commandes cmd_speed avnt mise au neutre automatique
 
         # durées timers (en sec)
         # durée de freinage (court-circuit moteur): valeur libre
@@ -74,9 +72,6 @@ class CommandSpeedNode(Node):
         self.publish_pwm(self.PWM_NEUTRAL)
         self.publish_esc_state()
 
-        # securité déconnexion /cmd_speed
-        self.timer_safety = self.create_timer(self.SAFETY_TIMEOUT, self.security_stop)
-
         # Sub
         self.subscriber = self.create_subscription(Float32, "/cmd_vel", self.cmd_callback, 10)
         self.create_subscription(ForkSpeed, '/raw_fork_data', self.cb_speed, 10)
@@ -91,7 +86,6 @@ class CommandSpeedNode(Node):
         self.esc_state_pub.publish(msg)
 
     def cmd_callback(self, msg):
-        self.timer_safety.reset()
         cmd_speed = max(min(msg.data, 1.0), -1.0)     # msg.data in [-1;1]
         self.process_cmd(cmd_speed)
 
@@ -164,11 +158,12 @@ class CommandSpeedNode(Node):
             if cmd_speed <= 0:
                 if cmd_speed < 0:
                     self.state = ESCState.REVERSE
+                    self.publish_esc_state()
                 self.reverse(cmd_speed)
             else:
                 self.state = ESCState.FORWARD
+                self.publish_esc_state()
                 self.forward(cmd_speed)
-            self.publish_esc_state()
             return
 
 
@@ -217,7 +212,7 @@ class CommandSpeedNode(Node):
     def start_braking_1(self):
         self.publish_pwm(self.PWM_REVERSE_MIN - 150)
         if self.debug:
-            self.get_logger().info(f"BRAKING_1 started PWM: {self.PWM_REVERSE_MIN - 150}\n\r")
+            self.get_logger().info(f"BRAKING_1 started PWM: {self.PWM_REVERSE_MIN - 350}\n\r")
         self.braking_1_timer.reset()  # restart timer
 
     def finish_braking_1(self):
@@ -255,11 +250,9 @@ class CommandSpeedNode(Node):
 
     # securité
     def security_stop(self):
-        self.get_logger().warn(f"Emergency brake triggered : '/cmd_speed' signal timeout")
+        self.get_logger().warn(f"Emergency brake triggered")
         # On ne passe PAS par process_cmd pour éviter les transitions d'état de freinage
         self.publish_pwm(self.PWM_NEUTRAL)
-        self.state = ESCState.NEUTRE_REV
-        self.publish_esc_state()
         # Optionnel : réinitialiser les timers de freinage pour éviter qu'ils ne se déclenchent plus tard
         self.braking_1_timer.cancel()
         self.braking_1b_timer.cancel()
