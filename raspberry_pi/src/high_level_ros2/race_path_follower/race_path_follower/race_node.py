@@ -52,7 +52,7 @@ def wait_for_task_result(navigator: BasicNavigator, logger, lap: int, goal_idx: 
                     f"Lap {lap}: goal {goal_idx}: remaining {distance:.2f} m",
                     throttle_duration_sec=1.0 
                 )
-        t.sleep(0.05)
+        t.sleep(0.01)
     return navigator.getResult()
 
 
@@ -61,7 +61,7 @@ def run_recovery(navigator: BasicNavigator, logger) -> None:
     navigator.backup(backup_dist=0.3, backup_speed=0.5, time_allowance=2)
 
     while not navigator.isTaskComplete():
-        t.sleep(0.05)
+        t.sleep(0.01)
 
     recovery_result = navigator.getResult()
     logger.info(f"Recovery result: {recovery_result}")
