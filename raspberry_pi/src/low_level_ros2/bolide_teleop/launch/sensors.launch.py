@@ -118,7 +118,7 @@ def generate_launch_description():
     tf_link_to_sonar = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
-        name="tf_link_to_laser",
+        name="tf_link_to_sonar",
         arguments=[
             "--x", "-0.20",
             "--y", "0",
@@ -168,7 +168,7 @@ def generate_launch_description():
             odom_node,
             tf_base_to_link,
             tf_link_to_laser,
-            # tf_link_to_sonar, #jamais testé
+            # tf_link_to_sonar,
             tf_link_to_ir_left,
             tf_link_to_ir_right,
             sllidar,
