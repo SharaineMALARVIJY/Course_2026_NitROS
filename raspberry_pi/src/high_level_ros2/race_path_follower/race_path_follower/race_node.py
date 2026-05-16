@@ -43,25 +43,28 @@ def wait_for_keyboard_start() -> None:
 
 def wait_for_task_result(navigator: BasicNavigator, logger, lap: int, goal_idx: int):
     while not navigator.isTaskComplete():
-        feedback = navigator.getFeedback()
-
-        if feedback:
-            distance = getattr(feedback, "distance_remaining", None)
-            if distance is not None:
-                logger.info(
-                    f"Lap {lap}: goal {goal_idx}: remaining {distance:.2f} m",
-                    throttle_duration_sec=1.0 
-                )
+        # feedback = navigator.getFeedback()
+        #
+        # if feedback:
+        #     distance = getattr(feedback, "distance_remaining", None)
+        #     if distance is not None:
+        #         logger.info(
+        #             f"Lap {lap}: goal {goal_idx}: remaining {distance:.2f} m",
+        #             throttle_duration_sec=1.0
+        #         )
         t.sleep(0.01)
     return navigator.getResult()
 
 
 def run_recovery(navigator: BasicNavigator, logger) -> None:
     logger.warn("Recovery: backup")
+
+    # TO DO: ajouter a backup disable_collision_checks = True 
+    # disable_collision_checks n'existe pas sur jazzy
     navigator.backup(backup_dist=0.3, backup_speed=0.5, time_allowance=2)
 
     while not navigator.isTaskComplete():
-        t.sleep(0.01)
+        t.sleep(0.025)
 
     recovery_result = navigator.getResult()
     logger.info(f"Recovery result: {recovery_result}")
