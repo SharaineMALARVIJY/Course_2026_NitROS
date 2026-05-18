@@ -43,7 +43,7 @@ def generate_launch_description():
 
     lifecycle_nodes = [
         'controller_server',
-        #'smoother_server',
+        'smoother_server',
         'planner_server',
         #'route_server',
         'behavior_server',
@@ -142,17 +142,17 @@ def generate_launch_description():
                 arguments=['--ros-args', '--log-level', log_level],
                 remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
             ),
-            # Node(
-            #     package='nav2_smoother',
-            #     executable='smoother_server',
-            #     name='smoother_server',
-            #     output='screen',
-            #     respawn=use_respawn,
-            #     respawn_delay=2.0,
-            #     parameters=[configured_params],
-            #     arguments=['--ros-args', '--log-level', log_level],
-            #     remappings=remappings,
-            # ),
+            Node(
+                package='nav2_smoother',
+                executable='smoother_server',
+                name='smoother_server',
+                output='screen',
+                respawn=use_respawn,
+                respawn_delay=2.0,
+                parameters=[configured_params],
+                arguments=['--ros-args', '--log-level', log_level],
+                remappings=remappings,
+            ),
             Node(
                 package='nav2_planner',
                 executable='planner_server',
@@ -257,14 +257,14 @@ def generate_launch_description():
                         remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
                         extra_arguments=[{'use_intra_process_comms': use_intra_process_comms}]
                     ),
-                    # ComposableNode(
-                    #     package='nav2_smoother',
-                    #     plugin='nav2_smoother::SmootherServer',
-                    #     name='smoother_server',
-                    #     parameters=[configured_params],
-                    #     remappings=remappings,
-                    #     extra_arguments=[{'use_intra_process_comms': use_intra_process_comms}]
-                    # ),
+                    ComposableNode(
+                        package='nav2_smoother',
+                        plugin='nav2_smoother::SmootherServer',
+                        name='smoother_server',
+                        parameters=[configured_params],
+                        remappings=remappings,
+                        extra_arguments=[{'use_intra_process_comms': use_intra_process_comms}]
+                    ),
                     ComposableNode(
                         package='nav2_planner',
                         plugin='nav2_planner::PlannerServer',

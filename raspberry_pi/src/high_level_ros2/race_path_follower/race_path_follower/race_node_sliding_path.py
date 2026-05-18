@@ -2,6 +2,8 @@ import math
 import time as t
 from typing import List, Optional, Tuple
 
+import yaml
+
 import rclpy
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion
 from nav_msgs.msg import Path
@@ -89,6 +91,64 @@ def validate_point(logger, name: str, p) -> bool:
     return True
 
 
+def load_track_points(tracks_file: str, active_track: str):
+    with open(tracks_file, "r") as f:
+        data = yaml.safe_load(f)
+
+    if data is None:
+        raise ValueError("tracks.yaml est vide.")
+
+    if "tracks" not in data:
+        raise ValueError("tracks.yaml doit contenir une section 'tracks'.")
+
+    if active_track == "":
+        if "active_track" not in data:
+            raise ValueError(
+                "Aucune trajectoire active. "
+                "Ajoute 'active_track' dans tracks.yaml ou dans race_params.yaml."
+            )
+        active_track = data["active_track"]
+
+    if active_track not in data["tracks"]:
+        available_tracks = list(data["tracks"].keys())
+        raise ValueError(
+            f"Trajectoire '{active_track}' introuvable. "
+            f"Trajectoires disponibles : {available_tracks}"
+        )
+
+    track_data = data["tracks"][active_track]
+
+    if "points" not in track_data:
+        raise ValueError(
+            f"La trajectoire '{active_track}' ne contient pas de section 'points'."
+        )
+
+    raw_points = track_data["points"]
+
+    if not isinstance(raw_points, list):
+        raise ValueError(
+            f"Les points de la trajectoire '{active_track}' doivent être une liste."
+        )
+
+    if len(raw_points) < 3:
+        raise ValueError(
+            f"La trajectoire '{active_track}' doit contenir au moins 3 points : "
+            f"p0 + au moins deux waypoints."
+        )
+
+    points: List[Point] = []
+
+    for i, p in enumerate(raw_points):
+        if not isinstance(p, (list, tuple)) or len(p) != 3:
+            raise ValueError(
+                f"Point p{i} invalide. Format attendu : [x, y, yaw]."
+            )
+
+        points.append((float(p[0]), float(p[1]), float(p[2])))
+
+    return active_track, points
+
+
 def wait_for_keyboard_start() -> None:
     while True:
         key = input("Tape 'd' puis Entrée pour démarrer : ").strip().lower()
@@ -123,14 +183,21 @@ def make_window_path(
     p_end: Point,
     planner_id: str,
     frame_id: str = "map",
+    use_start_for_first_segment: bool = True,
 ) -> Optional[Path]:
     """
     Crée une fenêtre de chemin composée de deux segments :
         p_start -> p_mid -> p_end
 
-    On planifie séparément :
-        p_start -> p_mid
-        p_mid   -> p_end
+    Si use_start_for_first_segment=True :
+        segment 1 = p_start -> p_mid
+
+    Si use_start_for_first_segment=False :
+        segment 1 = pose actuelle du robot -> p_mid
+        Le planner récupère alors le départ via TF.
+
+    Le segment 2 reste toujours :
+        p_mid -> p_end
 
     Puis on concatène les deux chemins.
     """
@@ -140,12 +207,22 @@ def make_window_path(
     path.header.frame_id = frame_id
     path.header.stamp = navigator.get_clock().now().to_msg()
 
-    segment_1 = navigator.getPath(
-        start=make_pose(navigator, p_start, frame_id),
-        goal=make_pose(navigator, p_mid, frame_id),
-        planner_id=planner_id,
-        use_start=True,
-    )
+    if use_start_for_first_segment:
+        segment_1 = navigator.getPath(
+            start=make_pose(navigator, p_start, frame_id),
+            goal=make_pose(navigator, p_mid, frame_id),
+            planner_id=planner_id,
+            use_start=True,
+        )
+    else:
+        # use_start=False : le planner prend la pose actuelle du robot via TF.
+        # On passe quand même un start valide car l'API Python garde l'argument start.
+        segment_1 = navigator.getPath(
+            start=make_pose(navigator, p_start, frame_id),
+            goal=make_pose(navigator, p_mid, frame_id),
+            planner_id=planner_id,
+            use_start=False,
+        )
 
     if segment_1 is None or not segment_1.poses:
         logger.error("Failed to plan first segment of window")
@@ -189,15 +266,19 @@ def wait_until_amcl_pose(navigator: RaceNavigator, timeout_sec: float) -> bool:
 def run_recovery(navigator: BasicNavigator, logger) -> None:
     logger.warn("Recovery: backup")
 
-    # TO DO: ajouter a backup disable_collision_checks = True 
-    # disable_collision_checks n'existe pas sur jazzy
-    navigator.backup(backup_dist=0.3, backup_speed=0.5, time_allowance=2) 
+    # disable_collision_checks n'existe pas sur Jazzy
+    navigator.backup(
+        backup_dist=0.3,
+        backup_speed=0.5,
+        time_allowance=2,
+    )
 
     while not navigator.isTaskComplete():
         t.sleep(0.025)
 
     recovery_result = navigator.getResult()
     logger.info(f"Recovery result: {recovery_result}")
+
 
 # -----------------------------------------------------------------------------
 # Main
@@ -220,24 +301,14 @@ def main() -> None:
     # Fenêtre glissante
     navigator.declare_parameter("switch_distance", 0.6)
     navigator.declare_parameter("amcl_timeout_sec", 10.0)
-    navigator.declare_parameter("cancel_on_switch", True)
+    navigator.declare_parameter("use_start_for_first_segment", True)
 
     # Démarrage clavier
     navigator.declare_parameter("wait_keyboard_start", True)
 
-    # Pose initiale
-    navigator.declare_parameter("p0", [0.0, 0.0, 0.0])
-
-    # Waypoints du circuit
-    navigator.declare_parameter("use_p1", False)
-    navigator.declare_parameter("use_p2", False)
-    navigator.declare_parameter("use_p3", False)
-    navigator.declare_parameter("use_p4", False)
-
-    navigator.declare_parameter("p1", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p2", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p3", [0.0, 0.0, 0.0])
-    navigator.declare_parameter("p4", [0.0, 0.0, 0.0])
+    # Nouveau chargement des trajectoires
+    navigator.declare_parameter("tracks_file", "tracks.yaml")
+    navigator.declare_parameter("active_track", "")
 
     # Lecture des paramètres
     laps = int(navigator.get_parameter("laps").value)
@@ -248,20 +319,25 @@ def main() -> None:
 
     switch_distance = float(navigator.get_parameter("switch_distance").value)
     amcl_timeout_sec = float(navigator.get_parameter("amcl_timeout_sec").value)
-    cancel_on_switch = bool(navigator.get_parameter("cancel_on_switch").value)
+    use_start_for_first_segment = bool(
+        navigator.get_parameter("use_start_for_first_segment").value
+    )
     wait_keyboard = bool(navigator.get_parameter("wait_keyboard_start").value)
 
-    p0 = tuple(navigator.get_parameter("p0").value)
+    tracks_file = str(navigator.get_parameter("tracks_file").value)
+    active_track = str(navigator.get_parameter("active_track").value)
 
-    use_p1 = bool(navigator.get_parameter("use_p1").value)
-    use_p2 = bool(navigator.get_parameter("use_p2").value)
-    use_p3 = bool(navigator.get_parameter("use_p3").value)
-    use_p4 = bool(navigator.get_parameter("use_p4").value)
+    # Chargement des points depuis tracks.yaml
+    try:
+        active_track, all_track_points = load_track_points(tracks_file, active_track)
+    except Exception as e:
+        logger.error(f"Erreur chargement trajectoire : {e}")
+        navigator.destroy_node()
+        rclpy.shutdown()
+        return
 
-    p1 = tuple(navigator.get_parameter("p1").value)
-    p2 = tuple(navigator.get_parameter("p2").value)
-    p3 = tuple(navigator.get_parameter("p3").value)
-    p4 = tuple(navigator.get_parameter("p4").value)
+    p0 = all_track_points[0]
+    circuit_points = all_track_points[1:]
 
     # Validation
     if not validate_point(logger, "p0", p0):
@@ -269,31 +345,17 @@ def main() -> None:
         rclpy.shutdown()
         return
 
-    all_points = {
-        "p1": p1,
-        "p2": p2,
-        "p3": p3,
-        "p4": p4,
-    }
-
-    for name, p in all_points.items():
-        if not validate_point(logger, name, p):
+    for i, p in enumerate(circuit_points, start=1):
+        if not validate_point(logger, f"p{i}", p):
             navigator.destroy_node()
             rclpy.shutdown()
             return
 
-    goal_points_one_lap: List[Tuple[str, Point]] = []
-    if use_p1:
-        goal_points_one_lap.append(("p1", p1))
-    if use_p2:
-        goal_points_one_lap.append(("p2", p2))
-    if use_p3:
-        goal_points_one_lap.append(("p3", p3))
-    if use_p4:
-        goal_points_one_lap.append(("p4", p4))
-
-    if len(goal_points_one_lap) < 2:
-        logger.error("Need at least 2 active points. Enable at least two of use_p1..use_p4")
+    if len(circuit_points) < 2:
+        logger.error(
+            "Need at least 2 circuit points after p0. "
+            "The track must contain p0, p1 and p2 minimum."
+        )
         navigator.destroy_node()
         rclpy.shutdown()
         return
@@ -316,16 +378,17 @@ def main() -> None:
         rclpy.shutdown()
         return
 
-    circuit_names = [name for name, _ in goal_points_one_lap]
-    circuit_points = [p for _, p in goal_points_one_lap]
+    circuit_names = [f"p{i}" for i in range(1, len(circuit_points) + 1)]
 
+    logger.info(f"Tracks file: {tracks_file}")
+    logger.info(f"Active track: {active_track}")
     logger.info(f"Initial pose p0: {p0}")
     logger.info(f"Planner: {planner_id}")
     logger.info(f"Controller: {controller_id}")
     logger.info(f"Frame: {frame_id}")
     logger.info(f"Laps: {laps}")
     logger.info(f"Switch distance: {switch_distance:.2f} m")
-    logger.info(f"Cancel on switch: {cancel_on_switch}")
+    logger.info(f"Use start for first segment: {use_start_for_first_segment}")
     logger.info(f"Ordered waypoints: {circuit_names}")
 
     # Pose initiale pour AMCL / Nav2
@@ -347,7 +410,7 @@ def main() -> None:
         wait_for_keyboard_start()
 
     # Nombre de changements de fenêtre.
-    # Pour laps = 1 avec p1,p2,p3,p4 :
+    # Exemple avec laps = 1 et p1,p2,p3,p4 :
     #   fenêtre 0 : p0 -> p1 -> p2
     #   switch p1
     #   fenêtre 1 : p1 -> p2 -> p3
@@ -389,6 +452,7 @@ def main() -> None:
             p_end=p_end,
             planner_id=planner_id,
             frame_id=frame_id,
+            use_start_for_first_segment=use_start_for_first_segment,
         )
 
         if window_path is None or not window_path.poses:
@@ -403,6 +467,7 @@ def main() -> None:
         navigator.followPath(
             path=window_path,
             controller_id=controller_id,
+            goal_checker_id="general_goal_checker",
         )
 
         loop_count = 0
@@ -446,14 +511,6 @@ def main() -> None:
                 break
 
             t.sleep(0.025)
-
-        # On remplace le chemin courant par la fenêtre suivante.
-        # Sans cancelTask(), l'ancien FollowPath peut continuer jusqu'à sa fin.
-        # Avec cancelTask(), on force le controller_server à accepter le nouveau path proprement.
-        if cancel_on_switch and not navigator.isTaskComplete():
-            logger.info("Canceling current FollowPath before switching window")
-            navigator.cancelTask()
-            t.sleep(0.1)
 
         target_index = (target_index + 1) % len(circuit_points)
 

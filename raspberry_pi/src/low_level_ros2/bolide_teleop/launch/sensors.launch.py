@@ -17,7 +17,6 @@ def generate_launch_description():
             {"angle_min_filter": -1.75},    # -100° (extrème gauche)
             {"angle_max_filter": 1.75},      # +100° (extrème droite)
             {"motor_speed": 750},
-
         ]
     )
     stm32_node = Node(
@@ -104,7 +103,7 @@ def generate_launch_description():
         executable="static_transform_publisher",
         name="tf_link_to_laser",
         arguments=[
-            "--x", "0.18",
+            "--x", "0.11",
             "--y", "0",
             "--z", "0.10",
             "--roll", "0.0", # 3.14159265359

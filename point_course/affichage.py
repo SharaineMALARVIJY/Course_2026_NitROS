@@ -1,176 +1,253 @@
+import math
+import yaml
 import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import yaml
 from PIL import Image
 
+# =========================
+# Paramètres
+# =========================
+TRACKS_FILE = "tracks.yaml"
+
+# "" = utilise active_track dans tracks.yaml
+ACTIVE_TRACK = ""
+
+# Si None, le nom de map est le même que la ACTIVE_TRACK,
+# avec suppression de "_reverse" si présent.
+# Exemple : MAP_NAME_OVERRIDE = "st_cyr_v3" pour forcer une map précise
+MAP_NAME_OVERRIDE = None
+
+MAP_FOLDER = "maps"
+
+
+
+
+
+
+
+MAP_IMAGE_EXTENSION = "pgm"
+ROTATE_MAP_IMAGE = False
+
+ARROW_LENGTH_M = 0.5
+POINT_MARKER_SIZE = 6
+LABEL_FONT_SIZE = 10
+LABEL_OFFSET_PX = 5
+ARROW_HEAD_WIDTH_PX = 5
+ARROW_HEAD_LENGTH_PX = 5
+
+GOAL_TOLERANCE_RADIUS_M = 1.0
+GOAL_TOLERANCE_LABEL = "goal tolerance"
+GOAL_TOLERANCE_COLOR = "orange"
+GOAL_TOLERANCE_LINE_WIDTH = 1.5
+
+POINT_COLOR = "red"
+LABEL_COLOR = "red"
+ARROW_COLOR = "blue"
 
 def get_resolution_origin(yaml_path):
     with open(yaml_path, "r") as f:
         data = yaml.safe_load(f)
+
     return data["resolution"], data["origin"]
 
 
 def open_image(image_path, rotate=False):
     img = Image.open(image_path)
+
     if rotate:
         img = np.rot90(img)
+
     return np.array(img, dtype=np.float32)
-
-
-def pix_to_coord(pix_x, pix_y, resolution, origin, height):
-    x = origin[0] + pix_x * resolution
-    y = origin[1] + (height - pix_y) * resolution
-    return x, y
 
 
 def coord_to_pix(x, y, resolution, origin, height):
     pix_x = (x - origin[0]) / resolution
     pix_y = height - ((y - origin[1]) / resolution)
+
     return pix_x, pix_y
 
 
-# ========================
-# FICHIERS
-# ========================
-yaml_path = "st_cyr_v3.yaml"
-image_path = "st_cyr_v3.pgm"
+def get_map_name_from_track_name(active_track):
+    if active_track.endswith("_reverse"):
+        return active_track.removesuffix("_reverse")
 
-image = open_image(image_path, False)
-resolution, origin = get_resolution_origin(yaml_path)
-height, width = image.shape
+    return active_track
 
 
-# ========================
-# POINTS DONNÉS
-# ========================
+def load_track_points(tracks_file, active_track=""):
+    with open(tracks_file, "r") as f:
+        data = yaml.safe_load(f)
 
-# test 3
-points = [
-    [-0.46399999999999997, -1.0099999999999998, -0.5880026035475677],
-    [1.036, -1.81, -0.4324077755705374],
-    [2.4360000000000004, 2.69, 2.5127963671743596],
-    [-2.264, 0.3400000000000003, -0.8441539861131713],
-]
+    if data is None:
+        raise ValueError("tracks.yaml est vide.")
 
-# test 4
-points = [
-    [-0.142, -0.050, 1.562],
-    [-3.425, 5.0680000000000005, 2.9441970937399122],
-    [-6.375, 2.8680000000000003, -1.4801364395941519],
-    [-3.075, -1.032, -1.4536875822280317],
-    [-0.142, -0.050, 1.562],
-]
+    if "tracks" not in data:
+        raise ValueError("tracks.yaml doit contenir une section 'tracks'.")
 
-# # test 4 reverse
-points = [
-    [-0.045, 0.005, -1.543],   # p0
-    [-2.9749999999999996, -0.9820000000000002, 1.543775877607632],   # p1
-    [-6.425, 2.1180000000000003, 1.5957911204138167],# p2
-    [-3.175, 5.268, 0.01817981507297854], # p3
-    [-0.4249999999999998, 2.218, -1.6359214901292822],  # p4
-]
+    if active_track == "":
+        if "active_track" not in data:
+            raise ValueError(
+                "Aucune trajectoire active. "
+                "Ajoute active_track dans tracks.yaml ou donne un nom dans affichage.py."
+            )
+        active_track = data["active_track"]
 
-# final
-points = [
-    [-0.626, 0.203, 1.648],
-    [-1.0219999999999994, 2.367, 1.8673421358645974],
-    [-5.772, 3.317000000000001, -2.7868870015788527],
-    [-5.572, -1.783, -0.03224688243525381],
-    [-0.7719999999999994, -2.133, 1.5707963267948966],
-]
+    if active_track not in data["tracks"]:
+        available_tracks = list(data["tracks"].keys())
+        raise ValueError(
+            f"Trajectoire '{active_track}' introuvable. "
+            f"Trajectoires disponibles : {available_tracks}"
+        )
 
-#final reverse
-points = [
-    [-1.207, -1.061, -1.63736449057072],
-    [-5.372, -1.783, 3.0258334358689822],
-    [-7.122, 0.9170000000000007, 1.6092389168160846],
-    [-1.072, 2.5170000000000003, -1.6162196062164735],
-    [-1.072, -2.9829999999999997, -1.6447353644528366],
-]
+    track_data = data["tracks"][active_track]
 
+    if "points" not in track_data:
+        raise ValueError(
+            f"La trajectoire '{active_track}' ne contient pas de section 'points'."
+        )
 
-points = [
-    [0.41200000000000037, 0.20900000000000052, -0.825376850520739],
-    [2.962, -2.2409999999999997, -0.6857295109062866],
-    [6.412000000000001, -3.991, 0.6435011087932848],
-    [5.662000000000001, -0.24099999999999966, 2.4468543773930898],
-    [1.1620000000000004, 1.5090000000000003, -2.530866689200585],
-]
+    points = track_data["points"]
 
-#map_etage_2_cleaned old
-points = [
-    [-3.049, 28.293, -1.316],
-    [-3.001999999999999, 25.145000000000003, -2.228684931977106],
-    [-5.501999999999999, 24.445000000000007, 1.8804992713373532],
-    [-5.901999999999999, 28.295, 0.5247957716501078],
-    [-3.049, 28.293, -1.316],
-]
+    if not isinstance(points, list):
+        raise ValueError(
+            f"Les points de la trajectoire '{active_track}' doivent être une liste."
+        )
 
-#st_cyr_v2
-points = [
-    [-0.071, 0.077, 0.024],
-    #[2.463, -0.3009999999999997, -0.7853981633974483],
-    #[1.9130000000000003, -0.0009999999999998899, -0.08314123188844098],
-    [3.263, -1.451, -1.6951513213416576],
-    [0.21300000000000008, -1.801, 2.9340964271545906],
-    [-0.43700000000000006, -0.05099999999999971, -0.07677189126977843],
-]
+    if len(points) < 2:
+        raise ValueError(
+            f"La trajectoire '{active_track}' doit contenir au moins 2 points."
+        )
 
-# st_cyr_v2 reverse
-points = [
-    [0.498, 0.102, 3.128],
-    [-0.03699999999999992, -1.801, 0.0],
-    [3.263, -1.501, 1.6614562139956415],
-    [2.013, -0.0009999999999998899, 3.141592653589793],
-    [-0.03699999999999992, 0.04899999999999993, 3.141592653589793],
-]
+    for i, p in enumerate(points):
+        if not isinstance(p, (list, tuple)) or len(p) != 3:
+            raise ValueError(
+                f"Point p{i} invalide. Format attendu : [x, y, yaw]."
+            )
 
-# st_cyr_v3
-points = [
-    [0.0, 0.0, 0.320],
-    [-0.4729999999999994, 2.104, -2.922923707715852],
-    [-3.223, 0.6040000000000003, -1.249045772398253],
-    [-1.3229999999999995, -0.19599999999999995, 0.5191461142465232],
-    [0.4770000000000003, 0.6540000000000001, 0.5880026035475668],
-]
+        float(p[0])
+        float(p[1])
+        float(p[2])
 
-# st_cyr_v3 reverse
-points = [
-    [0.425, 0.236, -2.740],
-    [-1.4229999999999996, -0.19599999999999995, -2.9441970937399127],
-    [-3.223, 0.4540000000000002, 1.63736449057072],
-    [-0.12299999999999933, 2.2540000000000004, -0.21109333322274654],
-    [0.7270000000000003, 0.7540000000000002, -2.714965160462917],
-]
-labels = ["p0", "p1", "p2", "p3", "p4"]
+    return active_track, points
 
 
-fig, ax = plt.subplots()
-ax.imshow(image, cmap="gray")
+def draw_points_and_orientations(
+    image,
+    resolution,
+    origin,
+    points,
+    active_track,
+    arrow_length_m=ARROW_LENGTH_M,
+    point_marker_size=POINT_MARKER_SIZE,
+    label_font_size=LABEL_FONT_SIZE,
+    label_offset_px=LABEL_OFFSET_PX,
+    arrow_head_width_px=ARROW_HEAD_WIDTH_PX,
+    arrow_head_length_px=ARROW_HEAD_LENGTH_PX,
+    goal_tolerance_radius_m=GOAL_TOLERANCE_RADIUS_M,
+    goal_tolerance_label=GOAL_TOLERANCE_LABEL,
+    goal_tolerance_color=GOAL_TOLERANCE_COLOR,
+    goal_tolerance_line_width=GOAL_TOLERANCE_LINE_WIDTH,
+    point_color=POINT_COLOR,
+    label_color=LABEL_COLOR,
+    arrow_color=ARROW_COLOR,
+):
+    height, width = image.shape
+    labels = [f"p{i}" for i in range(len(points))]
 
-arrow_length_m = 0.5
+    fig, ax = plt.subplots()
+    ax.imshow(image, cmap="gray")
 
-for i, (x, y, theta) in enumerate(points):
-    px, py = coord_to_pix(x, y, resolution, origin, height)
+    for i, (x, y, theta) in enumerate(points):
+        px, py = coord_to_pix(x, y, resolution, origin, height)
 
-    ax.plot(px, py, "ro", markersize=6)
-    ax.text(px + 5, py + 5, labels[i], color="red", fontsize=10)
+        if i != 0 and goal_tolerance_radius_m > 0:
+            goal_tolerance_circle = plt.Circle(
+                (px, py),
+                goal_tolerance_radius_m / resolution,
+                fill=False,
+                color=goal_tolerance_color,
+                linewidth=goal_tolerance_line_width,
+                label=goal_tolerance_label if i == 1 else None,
+            )
+            ax.add_patch(goal_tolerance_circle)
 
-    dx_m = arrow_length_m * np.cos(theta)
-    dy_m = arrow_length_m * np.sin(theta)
+        ax.plot(px, py, "o", color=point_color, markersize=point_marker_size)
+        ax.text(
+            px + label_offset_px,
+            py + label_offset_px,
+            labels[i],
+            color=label_color,
+            fontsize=label_font_size,
+        )
 
-    px2, py2 = coord_to_pix(x + dx_m, y + dy_m, resolution, origin, height)
+        dx_m = arrow_length_m * math.cos(theta)
+        dy_m = arrow_length_m * math.sin(theta)
 
-    ax.arrow(
-        px, py,
-        px2 - px, py2 - py,
-        head_width=5,
-        head_length=5,
-        fc="blue",
-        ec="blue"
+        px2, py2 = coord_to_pix(
+            x + dx_m,
+            y + dy_m,
+            resolution,
+            origin,
+            height,
+        )
+
+        ax.arrow(
+            px,
+            py,
+            px2 - px,
+            py2 - py,
+            head_width=arrow_head_width_px,
+            head_length=arrow_head_length_px,
+            fc=arrow_color,
+            ec=arrow_color,
+        )
+
+    ax.set_title(f"Trajectoire : {active_track}")
+    ax.set_aspect("equal")
+
+    if goal_tolerance_radius_m > 0 and len(points) > 1:
+        ax.legend()
+    plt.show()
+
+
+def main():
+    active_track, points = load_track_points(
+        tracks_file=TRACKS_FILE,
+        active_track=ACTIVE_TRACK,
     )
 
-ax.set_title("Affichage des points et orientations")
-plt.show()
+    if MAP_NAME_OVERRIDE is None:
+        map_name = get_map_name_from_track_name(active_track)
+    else:
+        map_name = MAP_NAME_OVERRIDE
+
+    map_yaml_path = f"{MAP_FOLDER}/{map_name}.yaml"
+    map_image_path = f"{MAP_FOLDER}/{map_name}.{MAP_IMAGE_EXTENSION}"
+
+    print(f"Trajectoire chargée : {active_track}")
+    print(f"Nom de map utilisé : {map_name}")
+    print(f"Map YAML : {map_yaml_path}")
+    print(f"Map image : {map_image_path}")
+    print(f"Nombre de points : {len(points)}")
+
+    for i, p in enumerate(points):
+        print(f"p{i}: {p}")
+
+    image = open_image(map_image_path, rotate=ROTATE_MAP_IMAGE)
+    resolution, origin = get_resolution_origin(map_yaml_path)
+
+    draw_points_and_orientations(
+        image=image,
+        resolution=resolution,
+        origin=origin,
+        points=points,
+        active_track=active_track,
+        arrow_length_m=ARROW_LENGTH_M,
+        goal_tolerance_radius_m=GOAL_TOLERANCE_RADIUS_M,
+    )
+
+
+if __name__ == "__main__":
+    main()

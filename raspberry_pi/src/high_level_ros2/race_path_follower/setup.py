@@ -23,7 +23,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'race_node=race_path_follower.race_node:main'
+            'race_node=race_path_follower.race_node:main',
+            'race_node_sliding_path=race_path_follower.race_node_sliding_path:main',
         ],
     },
 )
