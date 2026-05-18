@@ -2,11 +2,13 @@
 
 amcl:
   ros__parameters:
+    random_seed: 0
     # Odometry noise
-    alpha1: 0.5 # rotation -> rotation
+    alpha1: 0.3 # rotation -> rotation
     alpha2: 0.1 # rotation -> translation
-    alpha3: 0.1 # translation -> translation
+    alpha3: 0.05 # translation -> translation
     alpha4: 0.1 # translation -> rotation
+    # alpha5: 0.025
 
     # base_frame_id: "base_footprint"
     # odom_frame_id: "odom"
@@ -14,7 +16,7 @@ amcl:
 
     # Laser model
     laser_model_type: "likelihood_field" #"beam" et "likelihood_field_prob" a tester
-    max_beams: 120 
+    # max_beams: 60
     # laser_max_range: 100.0
     # laser_min_range: -1.0
     # laser_likelihood_max_dist: 2.0
@@ -39,8 +41,8 @@ amcl:
     # transform_tolerance: 1.0
 
     # Filter tuning
-    update_min_d: 0.10
-    update_min_a: 0.05  #2.9 degree
+    update_min_d: 0.15
+    update_min_a: 0.05  #0.05 rad = 2.9 degree
     # resample_interval: 1
     # recovery_alpha_fast: 0.0 # a tester
     # recovery_alpha_slow: 0.0 # a tester
@@ -112,8 +114,8 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::PoseProgressChecker"
-      required_movement_radius: 0.5 #m
-      movement_time_allowance: 10.0 #s
+      required_movement_radius: 0.2 #m
+      movement_time_allowance: 5.0 #s
 
     general_goal_checker:
       plugin: "nav2_controller::PositionGoalChecker"
@@ -137,11 +139,11 @@ controller_server:
       allow_obstacle_checking_beyond_goal: true
 
       # Vitesses limites
-      desired_linear_vel: 1.8          # vitesse de croisière (m/s)
+      desired_linear_vel: 1.2          # vitesse de croisière (m/s)
 
       use_dynamic_window : true
       max_linear_accel: 1.0            # accélération max (m/s²)
-      max_linear_decel: -1.0            # décélération max (m/s²)
+      max_linear_decel: -3.0            # décélération max (m/s²)
 
       # Lookahead
       # lookahead_dist: 0.5              # distance lookahead fixe (m) si lookahead dynamique false
@@ -155,7 +157,7 @@ controller_server:
 
       # Régulation de vitesse en courbe
       use_regulated_linear_velocity_scaling: false
-      regulated_linear_scaling_min_radius: 1.0   # rayon en dessous duquel on ralentit
+      regulated_linear_scaling_min_radius: 1.5   # rayon en dessous duquel on ralentit
       regulated_linear_scaling_min_speed: 0.25   # vitesse min en courbe serrée
 
       # Régulation par proximité des obstacles
@@ -174,16 +176,23 @@ controller_server:
       max_allowed_time_to_collision_up_to_carrot: 1.0
 
       # Direction
-      allow_reversing: true 
+      allow_reversing: true
 
 
     # FollowPath:
     #   plugin: "vector_pursuit_controller::VectorPursuitController"
     #
     #   k: 5.0
-    #   desired_linear_vel: 1.4
+    #   desired_linear_vel: 1.6
     #   min_linear_velocity: 0.2
     #   min_turning_radius: 0.60
+    #
+    #   # Régulation de vitesse en courbe
+    #   use_regulated_linear_velocity_scaling: true
+    #   regulated_linear_scaling_min_radius: 2.0   # rayon en dessous duquel on ralentit
+    #   regulated_linear_scaling_min_speed: 0.25   # vitesse min en courbe serrée
+    #
+    #
     #   max_lateral_accel: 2.5
     #   max_linear_accel: 2.5
     #   use_interpolation: true
@@ -194,15 +203,14 @@ controller_server:
     #
     #   # Lookahead
     #   # lookahead_dist: 0.8
+    #   use_velocity_scaled_lookahead_dist: true
     #   min_lookahead_dist: 0.2
     #   max_lookahead_dist: 1.5
     #   lookahead_time: 1.5
-    #   use_velocity_scaled_lookahead_dist: true
     #
     #   # Obstacles / collision
     #   use_collision_detection: false
     #   max_allowed_time_to_collision_up_to_target: 1.0
-    #   use_cost_regulated_linear_velocity_scaling: true
     #   cost_scaling_dist: 0.3
     #   cost_scaling_gain: 1.0
     #   inflation_cost_scaling_factor: 3.0
@@ -216,7 +224,7 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 16.0
+      update_frequency: 12.0 # frequence du lidar
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
@@ -316,7 +324,7 @@ planner_server:
       analytic_expansion_max_cost_override: false
 
       # Contrainte cinématique Ackermann
-      minimum_turning_radius: 0.85        # rayon de braquage minimum (m)
+      minimum_turning_radius: 0.80        # rayon de braquage minimum (m)
 
       # Heuristique
       max_iterations: 1000000
@@ -397,7 +405,7 @@ velocity_smoother:
     max_velocity: [3.0, 0.0, 99.0]
     min_velocity: [-1.5, 0.0, -99.0]
     max_accel: [1.0, 0.0, 99.0]
-    max_decel: [-1.0, 0.0, -99.0]
+    max_decel: [-3.0, 0.0, -99.0]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
