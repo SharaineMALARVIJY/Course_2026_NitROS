@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'cmd_dir_node = bolide_direction.cmd_dir_node:main',
+            'auto_calibrator = bolide_direction.auto_calibrator:main'
         ],
     },
 )
