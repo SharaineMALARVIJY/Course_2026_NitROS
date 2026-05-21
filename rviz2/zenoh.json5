@@ -1,0 +1,29 @@
+{
+  // Le bridge accepte des connexions entrantes
+  mode: "peer",
+
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"]
+  },
+
+  // On coupe la découverte automatique (évite les tempêtes réseau)
+  scouting: {
+    multicast: {
+      enabled: false
+    }
+  },
+
+  plugins: {
+    ros2dds: {
+      allow: {
+        // Le robot publie ces topics vers Zenoh
+        //publishers: [
+        //  ".*/scan",
+        //  ".*/tf_static"
+        //],
+        // Le robot n'a pas besoin de souscrire à distance
+        subscribers: []
+      }
+    }
+  }
+}

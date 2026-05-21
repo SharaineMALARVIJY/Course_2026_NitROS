@@ -1,0 +1,16 @@
+{
+  mode: "peer",
+  connect: {
+    endpoints: ["tcp/10.42.0.1:7447"]
+  },
+  scouting: {
+    multicast: {
+      enabled: false
+    }
+  },
+  plugins: {
+    ros2dds: {
+      domain: 10
+    }
+  }
+}
