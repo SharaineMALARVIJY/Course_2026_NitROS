@@ -3,7 +3,7 @@ race_node:
     laps: 7
     max_retries: 20
 
-    # use_start=False : le planner prend la pose actuelle du robot via TF.
+    # use_start_for_first_segment=False : le planner prend la pose actuelle du robot via TF sinon il relie les points.
     use_start_for_first_segment: false
 
     tracks_file: "/home/voiture/bolide_voiture/config_nav2/tracks.yaml"

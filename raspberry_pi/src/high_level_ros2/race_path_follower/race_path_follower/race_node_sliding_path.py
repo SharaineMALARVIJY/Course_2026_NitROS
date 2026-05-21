@@ -176,6 +176,103 @@ def append_path(dst: Path, src: Path) -> None:
     dst.poses.extend(src.poses[1:])
 
 
+def shifted_start_candidates(
+    p: Point,
+    search_radius: float,
+    search_step: float,
+) -> List[Point]:
+    """
+    Génère plusieurs starts autour de p pour éviter les erreurs "start occupied".
+
+    On teste d'abord p exact, puis des décalages devant/derrière et sur les côtés
+    dans le repère du yaw du point. Le premier start qui permet au planner de
+    créer un chemin est gardé.
+    """
+    x, y, yaw = float(p[0]), float(p[1]), float(p[2])
+
+    if search_radius <= 0.0 or search_step <= 0.0:
+        return [(x, y, yaw)]
+
+    forward_x = math.cos(yaw)
+    forward_y = math.sin(yaw)
+    left_x = -math.sin(yaw)
+    left_y = math.cos(yaw)
+
+    candidates: List[Point] = [(x, y, yaw)]
+    steps = int(math.ceil(search_radius / search_step))
+
+    # Déplacements simples : avant, arrière, gauche, droite.
+    for i in range(1, steps + 1):
+        d = i * search_step
+        candidates.extend([
+            (x + forward_x * d, y + forward_y * d, yaw),
+            (x - forward_x * d, y - forward_y * d, yaw),
+            (x + left_x * d, y + left_y * d, yaw),
+            (x - left_x * d, y - left_y * d, yaw),
+        ])
+
+    # Déplacements diagonaux autour de la voiture.
+    for i in range(1, steps + 1):
+        d = i * search_step
+        candidates.extend([
+            (x + forward_x * d + left_x * d, y + forward_y * d + left_y * d, yaw),
+            (x + forward_x * d - left_x * d, y + forward_y * d - left_y * d, yaw),
+            (x - forward_x * d + left_x * d, y - forward_y * d + left_y * d, yaw),
+            (x - forward_x * d - left_x * d, y - forward_y * d - left_y * d, yaw),
+        ])
+
+    return candidates
+
+
+def get_path_with_safe_start(
+    navigator: BasicNavigator,
+    start_point: Point,
+    goal_point: Point,
+    planner_id: str,
+    frame_id: str,
+    start_search_radius: float,
+    start_search_step: float,
+) -> Optional[Path]:
+    """
+    Appelle getPath en essayant plusieurs starts proches du start demandé.
+
+    Ça ne lit pas directement la costmap. On laisse le planner refuser les starts
+    invalides, puis on essaie le candidat suivant. C'est simple et robuste contre
+    les erreurs "start occupied" sur un waypoint ou une pose un peu dans le mur.
+    """
+    logger = navigator.get_logger()
+
+    candidates = shifted_start_candidates(
+        start_point,
+        search_radius=start_search_radius,
+        search_step=start_search_step,
+    )
+
+    for i, candidate in enumerate(candidates):
+        path = navigator.getPath(
+            start=make_pose(navigator, candidate, frame_id),
+            goal=make_pose(navigator, goal_point, frame_id),
+            planner_id=planner_id,
+            use_start=True,
+        )
+
+        if path is not None and path.poses:
+            if i > 0:
+                logger.warn(
+                    "Start occupied or invalid, using shifted start: "
+                    f"dx={candidate[0] - start_point[0]:.2f}, "
+                    f"dy={candidate[1] - start_point[1]:.2f}"
+                )
+            return path
+
+    logger.error(
+        "No valid start found around "
+        f"({start_point[0]:.2f}, {start_point[1]:.2f}) "
+        f"with radius {start_search_radius:.2f} m"
+    )
+    return None
+
+
 def make_window_path(
     navigator: BasicNavigator,
     p_start: Point,
@@ -184,6 +281,9 @@ def make_window_path(
     planner_id: str,
     frame_id: str = "map",
     use_start_for_first_segment: bool = True,
+    avoid_start_occupied: bool = True,
+    start_search_radius: float = 0.30,
+    start_search_step: float = 0.05,
 ) -> Optional[Path]:
     """
     Crée une fenêtre de chemin composée de deux segments :
@@ -208,15 +308,27 @@ def make_window_path(
     path.header.stamp = navigator.get_clock().now().to_msg()
 
     if use_start_for_first_segment:
-        segment_1 = navigator.getPath(
-            start=make_pose(navigator, p_start, frame_id),
-            goal=make_pose(navigator, p_mid, frame_id),
-            planner_id=planner_id,
-            use_start=True,
-        )
+        if avoid_start_occupied:
+            segment_1 = get_path_with_safe_start(
+                navigator=navigator,
+                start_point=p_start,
+                goal_point=p_mid,
+                planner_id=planner_id,
+                frame_id=frame_id,
+                start_search_radius=start_search_radius,
+                start_search_step=start_search_step,
+            )
+        else:
+            segment_1 = navigator.getPath(
+                start=make_pose(navigator, p_start, frame_id),
+                goal=make_pose(navigator, p_mid, frame_id),
+                planner_id=planner_id,
+                use_start=True,
+            )
     else:
         # use_start=False : le planner prend la pose actuelle du robot via TF.
-        # On passe quand même un start valide car l'API Python garde l'argument start.
+        # Important : dans ce mode, Nav2 ignore le start Python pour le départ réel.
+        # Donc on ne peut pas corriger "start occupied" ici sans corriger AMCL/TF.
         segment_1 = navigator.getPath(
             start=make_pose(navigator, p_start, frame_id),
             goal=make_pose(navigator, p_mid, frame_id),
@@ -230,12 +342,23 @@ def make_window_path(
 
     append_path(path, segment_1)
 
-    segment_2 = navigator.getPath(
-        start=make_pose(navigator, p_mid, frame_id),
-        goal=make_pose(navigator, p_end, frame_id),
-        planner_id=planner_id,
-        use_start=True,
-    )
+    if avoid_start_occupied:
+        segment_2 = get_path_with_safe_start(
+            navigator=navigator,
+            start_point=p_mid,
+            goal_point=p_end,
+            planner_id=planner_id,
+            frame_id=frame_id,
+            start_search_radius=start_search_radius,
+            start_search_step=start_search_step,
+        )
+    else:
+        segment_2 = navigator.getPath(
+            start=make_pose(navigator, p_mid, frame_id),
+            goal=make_pose(navigator, p_end, frame_id),
+            planner_id=planner_id,
+            use_start=True,
+        )
 
     if segment_2 is None or not segment_2.poses:
         logger.error("Failed to plan second segment of window")
@@ -302,6 +425,9 @@ def main() -> None:
     navigator.declare_parameter("switch_distance", 0.6)
     navigator.declare_parameter("amcl_timeout_sec", 10.0)
     navigator.declare_parameter("use_start_for_first_segment", True)
+    navigator.declare_parameter("avoid_start_occupied", True)
+    navigator.declare_parameter("start_search_radius", 0.30)
+    navigator.declare_parameter("start_search_step", 0.05)
 
     # Démarrage clavier
     navigator.declare_parameter("wait_keyboard_start", True)
@@ -322,6 +448,9 @@ def main() -> None:
     use_start_for_first_segment = bool(
         navigator.get_parameter("use_start_for_first_segment").value
     )
+    avoid_start_occupied = bool(navigator.get_parameter("avoid_start_occupied").value)
+    start_search_radius = float(navigator.get_parameter("start_search_radius").value)
+    start_search_step = float(navigator.get_parameter("start_search_step").value)
     wait_keyboard = bool(navigator.get_parameter("wait_keyboard_start").value)
 
     tracks_file = str(navigator.get_parameter("tracks_file").value)
@@ -378,6 +507,18 @@ def main() -> None:
         rclpy.shutdown()
         return
 
+    if start_search_radius < 0.0:
+        logger.error("start_search_radius must be >= 0")
+        navigator.destroy_node()
+        rclpy.shutdown()
+        return
+
+    if start_search_step <= 0.0:
+        logger.error("start_search_step must be > 0")
+        navigator.destroy_node()
+        rclpy.shutdown()
+        return
+
     circuit_names = [f"p{i}" for i in range(1, len(circuit_points) + 1)]
 
     logger.info(f"Tracks file: {tracks_file}")
@@ -389,6 +530,9 @@ def main() -> None:
     logger.info(f"Laps: {laps}")
     logger.info(f"Switch distance: {switch_distance:.2f} m")
     logger.info(f"Use start for first segment: {use_start_for_first_segment}")
+    logger.info(f"Avoid start occupied: {avoid_start_occupied}")
+    logger.info(f"Start search radius: {start_search_radius:.2f} m")
+    logger.info(f"Start search step: {start_search_step:.2f} m")
     logger.info(f"Ordered waypoints: {circuit_names}")
 
     # Pose initiale pour AMCL / Nav2
@@ -453,6 +597,9 @@ def main() -> None:
             planner_id=planner_id,
             frame_id=frame_id,
             use_start_for_first_segment=use_start_for_first_segment,
+            avoid_start_occupied=avoid_start_occupied,
+            start_search_radius=start_search_radius,
+            start_search_step=start_search_step,
         )
 
         if window_path is None or not window_path.poses:
@@ -471,6 +618,8 @@ def main() -> None:
         )
 
         loop_count = 0
+        retry_count = 0
+        max_retries = 30
 
         while rclpy.ok():
             rclpy.spin_once(navigator, timeout_sec=0.05)
@@ -503,9 +652,46 @@ def main() -> None:
                     break
 
                 if result == TaskResult.FAILED:
-                    logger.error("FollowPath failed")
+                    retry_count += 1
+                    logger.error(
+                        f"FollowPath failed on window {switch_count + 1}/{total_switches}. "
+                        f"Retry {retry_count}/{max_retries}"
+                    )
+
+                    if retry_count > max_retries:
+                        logger.error("Too many FollowPath failures, stopping race")
+                        navigator.destroy_node()
+                        rclpy.shutdown()
+                        return
+
                     run_recovery(navigator, logger)
-                    break
+
+                    logger.info("Replanning current window after recovery")
+                    window_path = make_window_path(
+                        navigator=navigator,
+                        p_start=p_start,
+                        p_mid=p_mid,
+                        p_end=p_end,
+                        planner_id=planner_id,
+                        frame_id=frame_id,
+                        use_start_for_first_segment=use_start_for_first_segment,
+                    )
+
+                    if window_path is None or not window_path.poses:
+                        logger.error("Replanning failed, stopping race")
+                        navigator.destroy_node()
+                        rclpy.shutdown()
+                        return
+
+                    logger.info(f"Replanning succeeded, new path poses: {len(window_path.poses)}")
+
+                    navigator.followPath(
+                        path=window_path,
+                        controller_id=controller_id,
+                        goal_checker_id="general_goal_checker",
+                    )
+
+                    continue
 
                 logger.warn(f"FollowPath ended with unknown result={result}")
                 break
