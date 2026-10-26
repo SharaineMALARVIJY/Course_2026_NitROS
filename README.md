@@ -8,7 +8,9 @@ All guides are available on this [website](https://jacobamaury.github.io/site_do
 
 The project aims to develop a fully autonomous vehicle based on **ROS 2** and the **Nav2 stack**, capable of navigating a race track with speed and reliability. It integrates localization, path planning, and control to achieve smooth and efficient trajectory tracking in a constrained environment.
 
-![Bolide](documentation/images/cars.jpeg)
+[![Vidéo de démo](https://img.youtube.com/vi/_qtebIZEp5c/0.jpg)](https://www.youtube.com/watch?v=_qtebIZEp5c)
+
+<!-- ![Bolide](documentation/images/cars.jpeg) -->
 
 ## ENS Race Overview
 https://ajuton-ens.github.io/CourseVoituresAutonomesSaclay/
